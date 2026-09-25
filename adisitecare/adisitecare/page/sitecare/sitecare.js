@@ -345,8 +345,8 @@ class adiSiteCarePage {
 						h.restart_available ? "" : esc(__("Restart is skipped in this run.") + " " + (h.supervisor || h.bench_start ? __("Use Restart bench afterwards.") : this.restartHint())))}
 					${tool("migrate", "migrate", __("Migrate"), "bench --site " + esc(d.site) + " migrate · " + __("then clears the cache"))}
 					${tool("clear_cache", "broom", __("Clear cache"), "clear-cache · clear-website-cache")}
-					${tool("restart", "power", __("Restart bench"), h.bench_start && !h.supervisor ? __("Development bench: stops bench start and starts it again.") : __("Restarts web and background workers (bench restart)."), "", !(h.restart_available || h.supervisor || h.bench_start),
-						h.restart_available ? "" : h.supervisor ? esc(__("Asks for the system user's password — used once, never saved.")) : h.bench_start ? esc(__("Runs in the background afterwards — output in logs/bench-start.log.")) : esc(this.restartHint()))}
+					${tool("restart", "power", __("Restart bench"), h.bench_start ? __("Development bench: stops bench start and starts it again.") : __("Restarts web and background workers (bench restart)."), "", !(h.restart_available || h.supervisor || h.bench_start),
+						h.bench_start ? esc(__("Runs in the background afterwards — output in logs/bench-start.log.")) : h.restart_available ? "" : h.supervisor ? esc(__("Asks for the system user's password — used once, never saved.")) : esc(this.restartHint()))}
 				</div>
 			</div>`);
 		body.find(".ae-act").on("click", (e) => {
@@ -365,18 +365,18 @@ class adiSiteCarePage {
 
 	restart() {
 		const h = this.data.health;
-		if (h.restart_available) {
-			return frappe.confirm(__("Restart bench now? Web and workers restart — a few seconds of downtime."), async () => {
-				const r = await frappe.call({ method: API + "start_action", args: { action: "restart" }, freeze: true });
-				this.watch(r.message.job);
-			});
-		}
-		if (!h.supervisor && h.bench_start) {
+		if (h.bench_start) {  // this web process runs under bench start — that's what is really running
 			return frappe.confirm(`<div style="line-height:1.6">${__("Development bench: stop <b>bench start</b> and start it again?")}<br>
 				<span class="text-muted">${__("It keeps running in the background afterwards — output goes to")} <code>logs/bench-start.log</code>.
 				${__("The terminal where it ran now will show it stopped.")}</span></div>`, async () => {
 				await frappe.call({ method: API + "restart_dev", freeze: true });
 				this.waitForRestart("bench start");
+			});
+		}
+		if (h.restart_available && !h.bench_start) {
+			return frappe.confirm(__("Restart bench now? Web and workers restart — a few seconds of downtime."), async () => {
+				const r = await frappe.call({ method: API + "start_action", args: { action: "restart" }, freeze: true });
+				this.watch(r.message.job);
 			});
 		}
 		if (!h.supervisor) return frappe.msgprint({ title: __("Restart bench"), message: esc(this.restartHint()) });
