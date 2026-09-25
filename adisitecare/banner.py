@@ -21,36 +21,39 @@ TEMPLATE = """<style>
     /* full width: take away the padding/border of whatever box the theme puts the banner in */
     :has(> .sitecare-staging-banner) { padding: 0 !important; border: 0 !important; background: none !important; }
     .sitecare-staging-banner { margin: 0 !important; }
+    @keyframes sitecare-pulse { 0% { box-shadow: 0 0 0 0 rgba(220,38,38,.55); } 70% { box-shadow: 0 0 0 7px rgba(220,38,38,0); } 100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); } }
+    .sitecare-staging-banner .sc-msg-short { display: none; }
+    @media (max-width: 640px) { .sitecare-staging-banner .sc-msg-long { display: none; } .sitecare-staging-banner .sc-msg-short { display: inline; } }
 </style>
 <div class="sitecare-staging-banner" style="
-    width: 100%;
-    background: linear-gradient(135deg, #fff7ed 0%, #fff1f2 100%);
-    color: #7f1d1d;
-    border-bottom: 1px solid #fecaca;
-    padding: 12px 20px;
-    text-align: center;
-    font-family: Arial, Helvetica, sans-serif;
-    box-sizing: border-box;
-    position: relative;
-    z-index: 99999;
+    width: 100%; box-sizing: border-box; position: relative; z-index: 99999;
+    background: linear-gradient(90deg, #fff7ed 0%, #fff1f2 55%, #fdf2f8 100%);
+    border-bottom: 1px solid #fecdd3;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Arial, sans-serif;
+    font-size: 13px; line-height: 1.4; color: #7f1d1d;
+    padding: 7px 16px;
+    display: flex; align-items: center; justify-content: center; gap: 8px 14px; flex-wrap: wrap;
 ">
-    <div style="display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; line-height: 1.5;">
-        <span style="display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
-            background: #fee2e2; border: 1px solid #fecaca; border-radius: 50%; font-size: 16px;">⚠️</span>
-        <strong style="color: #b91c1c; font-size: 14px; letter-spacing: .5px;">STAGING SITE</strong>
-        <span style="color: #7f1d1d; font-size: 13px;">Demo / Testing Environment</span>
-    </div>
-    <div style="margin-top: 5px; font-size: 13px; color: #991b1b; line-height: 1.5;">
-        🚫 <strong>Please do not place orders or make payments.</strong>
-        This is a demo/testing environment and no transactions will be processed.
-    </div>
-    <div style="margin-top: 9px; display: flex; justify-content: center; align-items: center;">
-        <span style="display: inline-flex; align-items: center; gap: 6px; background: #f0fdf4; color: #166534;
-            border: 1px solid #bbf7d0; border-radius: 20px; padding: 6px 13px; font-size: 12px; font-weight: 600;">
-            💾 Database Backup:
-            <span style="font-weight: 500;">Updated till {when}</span>
-        </span>
-    </div>
+    <span style="display: inline-flex; align-items: center; gap: 7px; background: #b91c1c; color: #fff;
+        border-radius: 999px; padding: 3px 11px 3px 9px; font-size: 11px; font-weight: 700; letter-spacing: .08em;">
+        <span style="width: 7px; height: 7px; border-radius: 50%; background: #fecaca; animation: sitecare-pulse 1.8s infinite;"></span>
+        STAGING
+    </span>
+    <span style="color: #7f1d1d;">
+        <strong style="font-weight: 600;">Test site</strong>
+        <span class="sc-msg-long"> — please don't place orders or make payments. Nothing here is processed.</span>
+        <span class="sc-msg-short"> — no orders or payments.</span>
+    </span>
+    <span style="display: inline-flex; align-items: center; gap: 7px; background: rgba(255,255,255,.75);
+        border: 1px solid #fecdd3; border-radius: 999px; padding: 3px 11px; font-size: 12px; color: #6b7280;
+        box-shadow: 0 1px 2px rgba(127,29,29,.06);">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2.2" stroke-linecap="round"
+            stroke-linejoin="round" style="flex: none;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span>Data as of</span>
+        <span style="color: #7f1d1d;">{date}</span>
+        <span style="width: 3px; height: 3px; border-radius: 50%; background: #fca5a5;"></span>
+        <strong style="color: #b91c1c; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em;">{time}</strong>
+    </span>
 </div>"""
 
 
@@ -83,6 +86,12 @@ def _q(s):
     import shlex
 
     return shlex.quote(s)
+
+
+def parts(dt):
+    """("Sat, 26 Sept 2026", "02:05 AM IST")"""
+    dt = frappe.utils.get_datetime(dt)
+    return f"{dt.strftime('%a')}, {dt.day} {MONTHS[dt.month - 1]} {dt.year}", f"{dt.strftime('%I:%M %p')} {_tz_label()}".strip()
 
 
 def label(dt):
@@ -121,7 +130,9 @@ def last_restore():
 
 
 def html(when):
-    return f"{START}\n{TEMPLATE.replace('{when}', frappe.utils.escape_html(label(when)))}\n{END}"
+    date, time = parts(when)
+    esc = frappe.utils.escape_html
+    return f"{START}\n{TEMPLATE.replace('{date}', esc(date)).replace('{time}', esc(time))}\n{END}"
 
 
 def current():
