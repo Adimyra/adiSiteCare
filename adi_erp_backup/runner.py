@@ -56,12 +56,13 @@ def read_state(job):
 
 def write_state(state):
 	state["updated"] = str(now_datetime())
+	state["now_ts"] = time.time()
 	try:
 		_cache().set_value(_key(state["job"]), state, expires_in_sec=3 * 24 * 3600)
 	except Exception:
 		pass  # Redis busy/flushed for a moment — the next write puts it back
 	if state.get("token"):  # mirror without anything sensitive
-		mirror = {k: state.get(k) for k in ("job", "type", "status", "stage", "progress", "error", "updated", "finished", "outputs", "restarted")}
+		mirror = {k: state.get(k) for k in ("job", "type", "action", "title", "status", "stage", "progress", "error", "updated", "finished", "outputs", "restarted", "steps", "now_ts")}
 		mirror["log"] = "\n".join((state.get("log") or "").splitlines()[-150:])
 		pub = public_status_path(state["token"])
 		with open(pub + ".tmp", "w") as f:
@@ -86,6 +87,51 @@ def new_state(job, kind, token=None, **extra):
 		"started": None, "finished": None, "outputs": {}, "token": token, **extra}
 	write_state(state)
 	return state
+
+
+# ---------------------------------------------------------------- steps (the checklist next to the terminal)
+
+RESTORE_STEPS = [("check", "Check the backup files"), ("safety", "Safety backup"), ("maintenance", "Maintenance mode on"),
+	("restore", "Restore database & files"), ("migrate", "Migrate & clear cache"), ("online", "Back online")]
+BACKUP_STEPS = [("backup", "Take the backup"), ("verify", "Check the backup files")]
+MIGRATE = ("migrate", "Migrate", ("migrate",), 300)
+CACHE = ("cache", "Clear cache", ("clear-cache",), 20)
+WEBCACHE = ("webcache", "Clear website cache", ("clear-website-cache",), 20)
+RESTART = ("restart", "Restart bench", None, 0)
+ACTIONS = {
+	"post_restore": ("After-restore tasks", [MIGRATE, CACHE, WEBCACHE, RESTART]),
+	"migrate": ("Migrate", [MIGRATE, CACHE, WEBCACHE]),
+	"clear_cache": ("Clear cache", [CACHE, WEBCACHE]),
+	"restart": ("Restart bench", [RESTART]),
+}
+
+
+def make_steps(pairs):
+	return [{"key": k, "label": label, "status": "pending", "started": None, "ended": None} for k, label in pairs]
+
+
+def set_step(state, key, status="running"):
+	now = time.time()
+	for st in state.get("steps") or []:
+		if st["key"] == key:
+			if status == "running" and st["status"] != "running":
+				st["started"] = now
+			if status != "running":
+				st["started"] = st["started"] or now
+				st["ended"] = now
+			st["status"] = status
+		elif status == "running" and st["status"] == "running":
+			st.update(status="done", ended=now)
+	write_state(state)
+
+
+def finish_steps(state, ok):
+	now = time.time()
+	for st in state.get("steps") or []:
+		if st["status"] == "running":
+			st.update(status="done" if ok else "failed", ended=now)
+		elif not ok and st["status"] == "pending":
+			st["status"] = "skipped"
 
 
 # ---------------------------------------------------------------- running commands
@@ -164,9 +210,23 @@ def save_record(state, fields=None):
 			doc.name = state["job"]
 			doc.flags.name_set = True
 			doc.db_insert()
+			fix_series(state["job"])
 		frappe.db.commit()
 	except Exception:
 		frappe.db.rollback()
+
+
+def fix_series(name):
+	"""The restored database has the naming counter from backup time — move it past a job we put back."""
+	prefix, _sep, num = name.rpartition("-")
+	if not num.isdigit():
+		return
+	prefix, num = prefix + "-", int(num)
+	current = frappe.db.sql("select current from `tabSeries` where name=%s", prefix)
+	if not current:
+		frappe.db.sql("insert into `tabSeries` (name, current) values (%s, %s)", (prefix, num))
+	elif (current[0][0] or 0) < num:
+		frappe.db.sql("update `tabSeries` set current=%s where name=%s", (num, prefix))
 
 
 def _reconnect():
@@ -179,6 +239,79 @@ def _reconnect():
 	frappe.connect(frappe.local.site)
 
 
+def _reconcile(job):
+	"""A restored database brings back job records as they were at backup time — close the ones still 'running'."""
+	try:
+		frappe.db.sql("""update `tabERP Backup Job` set status='Interrupted', stage='Closed — this record came back with a restored backup'
+			where status in ('Queued', 'Running') and name != %s""", job)
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+
+
+def restart_available():
+	return _supervisor_ok()
+
+
+def _do_restart(state):
+	"""Last step, detached — a restart also restarts the worker running this job."""
+	set_step(state, "restart")
+	if not _supervisor_ok():
+		log(state, "↻ Restart skipped — this server needs a one-time setup so the app can restart without a password: "
+			"`sudo bench setup production <user>` (or `sudo bench setup sudoers <user>`). "
+			"Without it, restart from the terminal: bench restart")
+		set_step(state, "restart", "skipped")
+		return False
+	bench = shutil.which("bench") or os.path.expanduser("~/.local/bin/bench")
+	log(state, "\n$ bench restart")
+	try:
+		subprocess.Popen([bench, "restart"], cwd=get_bench_path(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+			stderr=subprocess.DEVNULL, start_new_session=True)
+		state["restarted"] = True
+		log(state, "↻ Restart started — web and workers come back in a few seconds.")
+		set_step(state, "restart", "done")
+		return True
+	except Exception as e:
+		log(state, f"⚠ Couldn't run bench restart ({e}) — run it from the terminal.")
+		set_step(state, "restart", "failed")
+		return False
+
+
+# ---------------------------------------------------------------- actions (migrate / clear cache / restart)
+
+
+def run_action(job):
+	state = read_state(job)
+	if not state:
+		return
+	title, steps = ACTIONS[state["action"]]
+	state.update(status="Running", started=str(now_datetime()))
+	save_record(state, {"started_on": state["started"]})
+	wants_restart = any(k == "restart" for k, *_ in steps)
+	work = [x for x in steps if x[0] != "restart"]
+	try:
+		for i, (key, label, args, expect) in enumerate(work):
+			set_step(state, key)
+			a = 5 + int(90 * i / max(len(work), 1))
+			b = 5 + int(90 * (i + 1) / max(len(work), 1))
+			run(state, _frappe_cmd(*args), label, a, b, expect)
+			set_step(state, key, "done")
+		state.update(status="Success", stage=f"{title} complete", progress=100, finished=str(now_datetime()))
+		log(state, f"✓ {title} complete.")
+		write_state(state)
+		save_record(state)
+		if wants_restart:
+			_do_restart(state)
+			save_record(state)
+	except Exception as e:
+		finish_steps(state, False)
+		state.update(status="Failed", stage=f"{title} failed", error=str(e), finished=str(now_datetime()))
+		log(state, f"✗ {e}")
+		write_state(state)
+		save_record(state)
+	_notify(state)
+
+
 # ---------------------------------------------------------------- backup
 
 
@@ -188,15 +321,25 @@ def run_backup(job):
 	save_record(state, {"started_on": state["started"]})
 	try:
 		args = ["backup"] + (["--with-files"] if state.get("with_files") else [])
+		set_step(state, "backup")
 		run(state, _frappe_cmd(*args), "Taking backup", 5, 95, expect_seconds=240 if state.get("with_files") else 60)
+		set_step(state, "verify")
 		outputs = parse_backup_output(state["log"])
 		if not outputs.get("db"):
 			raise RuntimeError("The backup finished but no database file was reported.")
+		for key, fn in outputs.items():
+			path = os.path.join(backups_dir(), fn)
+			if not os.path.isfile(path) or (fn.endswith(".gz") and subprocess.run(["gzip", "-t", path], capture_output=True).returncode != 0):
+				raise RuntimeError(f"Backup file {fn} is missing or damaged.")
+		log(state, "✓ Backup files checked — " + ", ".join(outputs.values()))
+		finish_steps(state, True)
 		state.update(outputs=outputs, status="Success", stage="Backup complete", progress=100, finished=str(now_datetime()))
 		write_state(state)
 		save_record(state, {"db_file": outputs.get("db"), "public_file": outputs.get("public"), "private_file": outputs.get("private"), "config_file": outputs.get("config")})
 	except Exception as e:
+		finish_steps(state, False)
 		state.update(status="Failed", stage="Backup failed", error=str(e), finished=str(now_datetime()))
+		log(state, f"✗ {e}")
 		write_state(state)
 		save_record(state)
 	_notify(state)
@@ -232,6 +375,7 @@ def run_restore(job):
 	with_files = bool(src.get("public") or src.get("private"))
 	try:
 		# 1. pre-flight: the files are there and look right
+		set_step(state, "check")
 		state.update(stage="Checking the backup files", progress=3)
 		log(state, "Checking the backup files…")
 		from frappe.installer import is_downgrade, is_partial, validate_database_sql
@@ -261,12 +405,14 @@ def run_restore(job):
 				os.utime(path)
 		log(state, "✓ Backup files look good.")
 
+		set_step(state, "safety")
 		# 2. safety backup of the site as it is now — the undo point (lands in private/backups too)
 		run(state, _frappe_cmd("backup", *(["--with-files"] if with_files else [])), "Safety backup of the current site", 5, 25, expect_seconds=120)
 		safety = parse_backup_output(state["log"])
 		state["outputs"]["safety"] = safety
 		log(state, f"✓ Safety backup: {safety.get('db')}")
 
+		set_step(state, "maintenance")
 		# 3. maintenance mode ON (and make sure it really is), scheduler paused
 		run(state, _frappe_cmd("set-maintenance-mode", "on"), "Maintenance mode on", 26, 30, 10)
 		maintenance_on = True
@@ -277,6 +423,7 @@ def run_restore(job):
 		if staging:
 			run(state, _frappe_cmd("set-config", "mute_emails", "1"), "Muting outgoing emails (staging copy)", 32, 33, 10)
 
+		set_step(state, "restore")
 		# 4. restore — with the site's own database user, so no MariaDB root password is needed
 		args = ["adierp-restore-db", db]
 		if src.get("public"):
@@ -296,11 +443,13 @@ def run_restore(job):
 		if APP not in apps:
 			run(state, _frappe_cmd("install-app", APP), "Re-installing adiERP Backup", 70, 74, 60)
 
+		set_step(state, "migrate")
 		# 6. migrate + caches
 		run(state, _frappe_cmd("migrate"), "Migrating", 74, 92, expect_seconds=300)
 		run(state, _frappe_cmd("clear-cache"), "Clearing cache", 92, 94, 20)
 		run(state, _frappe_cmd("clear-website-cache"), "Clearing website cache", 94, 95, 20)
 
+		set_step(state, "online")
 		# 7. back online
 		if staging:
 			log(state, "Staging copy: the scheduler stays PAUSED and emails stay MUTED "
@@ -309,28 +458,21 @@ def run_restore(job):
 			run(state, _frappe_cmd("set-config", "pause_scheduler", "0"), "Resuming the scheduler", 95, 96, 10)
 		run(state, _frappe_cmd("set-maintenance-mode", "off"), "Maintenance mode off", 96, 98, 10)
 		maintenance_on = False
-		log(state, "✓ Site is back online. Everyone needs to sign in again.")
+		log(state, "✓ Site is back online.")
+		set_step(state, "online", "done")
 
 		state.update(status="Success", stage="Restore complete", progress=100, finished=str(now_datetime()))
 		write_state(state)
 		_reconnect()
+		_reconcile(job)
 		save_record(state, {"safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
 			"restore_public": os.path.basename(src.get("public") or "") or None, "restore_private": os.path.basename(src.get("private") or "") or None})
 
-		# 8. optional restart — only when it can run without a password; last and detached
+		# 8. optional restart — last and detached; skipped (never asks a password) when the server isn't set up for it
 		if state.get("restart"):
-			bench = shutil.which("bench") or os.path.expanduser("~/.local/bin/bench")
-			if not _supervisor_ok():
-				log(state, "↻ Restart skipped — this server needs a one-time setup so the app can restart without a password: "
-					"`sudo bench setup production <user>` (or `sudo bench setup sudoers <user>`). "
-					"A restart is not required after a restore — the site is already live.")
-			else:
-				try:
-					subprocess.Popen([bench, "restart"], cwd=get_bench_path(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-						stderr=subprocess.DEVNULL, start_new_session=True)
-					state["restarted"] = True
-					log(state, "↻ Restart requested (bench restart).")
-				except Exception as e:
+			_do_restart(state)
+			save_record(state)
+	except Exception as e:
 					log(state, f"⚠ Couldn't run bench restart ({e}) — restart the services yourself if needed.")
 	except Exception as e:
 		recovery = ""
@@ -345,11 +487,13 @@ def run_restore(job):
 				f"To go back to how it was, restore the safety backup {safety} (it is in the backups list), "
 				f"or on the server: bench --site {frappe.local.site} adierp-restore-db sites/{frappe.local.site}/private/backups/{safety}, "
 				"then migrate and set-maintenance-mode off.")
+		finish_steps(state, False)
 		state.update(status="Failed", stage="Restore failed", error=f"{e} {recovery}".strip(), finished=str(now_datetime()))
 		log(state, f"✗ {state['error']}")
 		write_state(state)
 		try:
 			_reconnect()
+			_reconcile(job)
 		except Exception:
 			pass
 		save_record(state)

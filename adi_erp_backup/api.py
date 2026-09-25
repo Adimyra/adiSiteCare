@@ -4,6 +4,7 @@ user's password and the site name, like any destructive operation should."""
 import os
 import re
 import shutil
+import time
 
 import frappe
 from frappe import _
@@ -32,7 +33,40 @@ def _human(n):
 
 
 def _busy_job():
-	return frappe.db.get_value("ERP Backup Job", {"status": ["in", ["Queued", "Running"]]}, "name")
+	"""A job counts as busy only while it is really alive (its live state says so and it moved recently)."""
+	for name in frappe.get_all("ERP Backup Job", {"status": ["in", ["Queued", "Running"]]}, pluck="name", order_by="creation desc"):
+		state = runner.read_state(name)
+		if state and state.get("status") in ("Queued", "Running") and time.time() - (state.get("now_ts") or 0) < 2 * 3600:
+			return name
+	return None
+
+
+def _health():
+	conf = runner.site_config()
+	common = frappe.get_conf()
+	pending = frappe.db.count("Email Queue", {"status": "Not Sent"}) if frappe.db.table_exists("Email Queue") else 0
+	workers = None
+	try:
+		from frappe.utils.background_jobs import get_workers
+
+		workers = len(get_workers())
+	except Exception:
+		pass
+	cache = runner._cache()
+	restart = cache.get_value(f"{runner.APP}:restart_ok")
+	if restart is None:
+		restart = bool(runner.restart_available())
+		cache.set_value(f"{runner.APP}:restart_ok", restart, expires_in_sec=600)
+	return {
+		"maintenance": bool(cint(conf.get("maintenance_mode"))),
+		"scheduler_paused": bool(cint(conf.get("pause_scheduler")) or cint(common.get("pause_scheduler"))),
+		"scheduler_paused_bench": bool(cint(common.get("pause_scheduler")) and not cint(conf.get("pause_scheduler"))),
+		"emails_muted": bool(cint(conf.get("mute_emails"))),
+		"emails_muted_bench": bool(cint(common.get("mute_emails")) and not cint(conf.get("mute_emails"))),
+		"pending_emails": pending,
+		"workers": workers,
+		"restart_available": restart,
+	}
 
 
 # ---------------------------------------------------------------- overview
@@ -60,7 +94,7 @@ def overview() -> dict:
 		s = g["stamp"]
 		g["when"] = f"{s[6:8]}-{s[4:6]}-{s[0:4]} {s[9:11]}:{s[11:13]}"
 	total, used, free = shutil.disk_usage(get_bench_path())
-	jobs = frappe.get_all("ERP Backup Job", fields=["name", "job_type", "status", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
+	jobs = frappe.get_all("ERP Backup Job", fields=["name", "job_type", "action", "status", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
 		"db_file", "public_file", "private_file", "error", "status_token"], order_by="creation desc", limit=15)
 	for j in jobs:
 		j["by"] = frappe.utils.get_fullname(j.requested_by) if j.requested_by else ""
@@ -71,6 +105,7 @@ def overview() -> dict:
 		"backups": backups[:30],
 		"jobs": jobs,
 		"busy": _busy_job(),
+		"health": _health(),
 		"disk": {"free": _human(free), "free_bytes": free, "total": _human(total), "pct_used": round(used * 100 / total)},
 		"db_size": _human(frappe.db.sql("select sum(data_length + index_length) from information_schema.tables where table_schema=%s", frappe.conf.db_name)[0][0] or 0),
 	}
@@ -134,7 +169,8 @@ def start_backup(with_files: int | str = 0) -> dict:
 	doc = frappe.get_doc({"doctype": "ERP Backup Job", "job_type": "Backup", "status": "Queued", "stage": "Queued",
 		"with_files": cint(with_files), "requested_by": frappe.session.user, "started_on": now_datetime()})
 	doc.insert(ignore_permissions=True)
-	runner.new_state(doc.name, "Backup", with_files=cint(with_files), user=frappe.session.user)
+	runner.new_state(doc.name, "Backup", with_files=cint(with_files), user=frappe.session.user,
+		title=_("Backup with files") if cint(with_files) else _("Database backup"), steps=runner.make_steps(runner.BACKUP_STEPS))
 	frappe.db.commit()
 	frappe.enqueue("adi_erp_backup.runner.run_backup", queue="long", timeout=4 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name}
@@ -261,11 +297,62 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 		"restore_private": os.path.basename(sources["private"] or "") or None})
 	doc.insert(ignore_permissions=True)
 	runner.cleanup_status_files()
+	steps = runner.RESTORE_STEPS + ([("restart", "Restart bench")] if cint(restart) else [])
 	runner.new_state(doc.name, "Restore", token=doc.status_token, sources=sources, restart=cint(restart), staging=cint(staging),
-		user=frappe.session.user, with_files=doc.with_files)
+		user=frappe.session.user, with_files=doc.with_files, title=_("Restore {0}").format(os.path.basename(sources["db"])),
+		steps=runner.make_steps(steps))
 	frappe.db.commit()
 	frappe.enqueue("adi_erp_backup.runner.run_restore", queue="long", timeout=6 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name, "token": doc.status_token}
+
+
+# ---------------------------------------------------------------- tools
+
+
+@frappe.whitelist(methods=["POST"])
+def start_action(action: str) -> dict:
+	"""Migrate / clear cache / restart / all after-restore tasks — as a job with the live terminal."""
+	_require()
+	if action not in runner.ACTIONS:
+		frappe.throw(_("Unknown action"))
+	if _busy_job():
+		frappe.throw(_("Another job is already running — wait for it to finish."))
+	title, steps = runner.ACTIONS[action]
+	doc = frappe.get_doc({"doctype": "ERP Backup Job", "job_type": "Action", "action": title, "status": "Queued", "stage": "Queued",
+		"requested_by": frappe.session.user, "started_on": now_datetime()})
+	doc.insert(ignore_permissions=True)
+	runner.new_state(doc.name, "Action", action=action, title=title, user=frappe.session.user,
+		steps=runner.make_steps([(k, label) for k, label, *_ in steps]))
+	frappe.db.commit()
+	frappe.enqueue("adi_erp_backup.runner.run_action", queue="long", timeout=2 * 3600, job=doc.name, enqueue_after_commit=True)
+	return {"job": doc.name}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_emails(muted: int | str, discard_pending: int | str = 0) -> dict:
+	"""Mute / unmute outgoing email for this site (site_config: mute_emails).
+	While muted, emails wait in the Email Queue; unmuting sends them — unless they are discarded first."""
+	_require()
+	from frappe.installer import update_site_config
+
+	discarded = 0
+	if not cint(muted) and cint(discard_pending):
+		discarded = frappe.db.count("Email Queue", {"status": "Not Sent"})
+		frappe.db.sql("""update `tabEmail Queue` set status='Error', error='Discarded by adiERP Backup before unmuting (staging copy)'
+			where status='Not Sent'""")
+		frappe.db.commit()
+	update_site_config("mute_emails", 1 if cint(muted) else 0)
+	return {"health": _health(), "discarded": discarded}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_scheduler(paused: int | str) -> dict:
+	"""Pause / resume scheduled jobs for this site (site_config: pause_scheduler)."""
+	_require()
+	from frappe.installer import update_site_config
+
+	update_site_config("pause_scheduler", 1 if cint(paused) else 0)
+	return {"health": _health()}
 
 
 def has_app_permission():

@@ -39,6 +39,12 @@ Then **Start restore** runs, in order:
 - **Staging copy** option keeps `mute_emails` on and the scheduler paused, so production data on staging never
   emails real customers.
 
+#### Tools
+- **Site switches** — outgoing emails (`mute_emails`) and scheduler (`pause_scheduler`) on/off. When unmuting, the emails
+  waiting in the Email Queue can be discarded first (recommended on staging — they may be production emails).
+- **Run a command** with the live terminal: *After-restore tasks* (migrate → clear cache → clear website cache → restart),
+  *Migrate*, *Clear cache*, *Restart bench*. Use After-restore tasks if a restore ran without restart.
+
 #### Safety
 - System Manager only; restore also needs the site name typed exactly and the user's password.
 - Only one job at a time; disk space is checked first.
