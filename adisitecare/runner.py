@@ -245,6 +245,10 @@ def _snapshot_history():
 		return frappe.get_all("SiteCare Job", fields=["*"], order_by="creation asc")
 	except Exception:
 		return []
+	finally:
+		# end the read transaction — an open one holds a metadata lock on the table and the
+		# restore's DROP TABLE would wait for it forever
+		frappe.db.rollback()
 
 
 def _restore_history(rows):
@@ -509,6 +513,7 @@ def run_restore(job):
 			args += ["--public-files", src["public"]]
 		if src.get("private"):
 			args += ["--private-files", src["private"]]
+		frappe.db.commit()  # hold no transaction (and no table locks) while the database is replaced
 		restored = True  # from here on the database may already be changed
 		run(state, _frappe_cmd(*args), "Restoring the database" + (" and files" if with_files else ""), 34, 70, expect_seconds=300)
 		if key_from_backup and key_from_backup != site_config().get("encryption_key"):
@@ -554,8 +559,6 @@ def run_restore(job):
 		if state.get("restart"):
 			_do_restart(state)
 			save_record(state)
-	except Exception as e:
-					log(state, f"⚠ Couldn't run bench restart ({e}) — restart the services yourself if needed.")
 	except Exception as e:
 		recovery = ""
 		if maintenance_on and not restored:

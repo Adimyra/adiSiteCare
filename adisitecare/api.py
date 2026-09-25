@@ -84,6 +84,7 @@ def _health():
 		"pending_emails": pending,
 		"workers": workers,
 		"restart_available": restart,
+		"dev_mode": bool(cint(frappe.get_conf().get("developer_mode"))),
 	}
 
 

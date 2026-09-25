@@ -7,6 +7,7 @@ Works on Frappe v15 and v16 (MariaDB).
 """
 
 import inspect
+import json
 import os
 import subprocess
 
@@ -45,6 +46,48 @@ def _import(sql_file):
 			os.remove(tmp)
 
 
+LEGACY = {"adi_erp_backup": "adisitecare"}  # renamed apps: old name → new name
+
+
+def _fix_installed_apps():
+	"""A backup lists the apps its site had. Apps that aren't on this bench would break migrate,
+	so take them off the site's installed list (like `bench remove-from-installed-apps`) and say so."""
+	row = frappe.db.sql("select defvalue from `tabDefaultValue` where defkey='installed_apps' and parent='__global'")
+	installed = json.loads(row[0][0]) if row and row[0][0] else []
+	on_bench = set(frappe.get_all_apps())
+	missing = [a for a in installed if a not in on_bench]
+	if not missing:
+		return
+	keep = []
+	for app in installed:
+		if app not in missing:
+			keep.append(app)
+		elif LEGACY.get(app) in on_bench:
+			_move_legacy(app)
+			keep.append(LEGACY[app])
+			print(f"✓ {app} was renamed to {LEGACY[app]} — moved its records")
+		else:
+			print(f"⚠ App {app} is in the backup but not on this bench — removed from installed apps "
+				f"(install it and migrate again if you need it)")
+	keep = list(dict.fromkeys(keep))  # no duplicates, same order
+	frappe.db.sql("update `tabDefaultValue` set defvalue=%s where defkey='installed_apps' and parent='__global'", json.dumps(keep))
+	frappe.db.sql("delete from `tabInstalled Application` where app_name in %s", (tuple(missing),))
+	frappe.db.commit()
+	frappe.cache.delete_keys("")  # installed apps are cached in Redis too
+
+
+def _move_legacy(app):
+	if app == "adi_erp_backup":
+		if frappe.db.sql("show tables like 'tabERP Backup Job'") and not frappe.db.sql("show tables like 'tabSiteCare Job'"):
+			frappe.db.sql_ddl("RENAME TABLE `tabERP Backup Job` TO `tabSiteCare Job`")
+		for dt in ("DocField", "DocPerm", "DocType Action", "DocType Link", "DocType State"):
+			frappe.db.sql(f"delete from `tab{dt}` where parent='ERP Backup Job'")
+		frappe.db.sql("delete from `tabDocType` where name='ERP Backup Job'")
+		frappe.db.sql("delete from `tabHas Role` where parenttype='Page' and parent='adierp-backup'")
+		frappe.db.sql("delete from `tabPage` where name='adierp-backup'")
+		frappe.db.sql("delete from `tabModule Def` where name='adiERP Backup'")
+
+
 @click.command("sitecare-restore-db")
 @click.argument("sql_file")
 @click.option("--public-files", help="Public files backup (.tar / .tgz)")
@@ -71,6 +114,7 @@ def restore_db(context, sql_file, public_files=None, private_files=None):
 		print(f"Importing {os.path.basename(sql_file)} …")
 		_import(sql_file)
 		print("Database restored")
+		_fix_installed_apps()
 	finally:
 		frappe.destroy()
 

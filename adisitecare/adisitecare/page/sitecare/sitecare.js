@@ -340,11 +340,11 @@ class adiSiteCarePage {
 				<div class="ae-card-head"><div><h3>${__("Run a command")}</h3><p>${__("Runs in the background with the live terminal — same as typing it on the server.")}</p></div></div>
 				<div class="ae-tools">
 					${tool("post_restore", "restore", __("After-restore tasks"), __("migrate → clear-cache → clear-website-cache → restart. Use it if you restored without restart, or something looks stale."), "hi", false,
-						h.restart_available ? "" : __("Restart will be skipped here — not possible without a password on this server."))}
+						h.restart_available ? "" : esc(__("Restart is skipped here.") + " " + this.restartHint()))}
 					${tool("migrate", "migrate", __("Migrate"), "bench --site " + esc(d.site) + " migrate · " + __("then clears the cache"))}
 					${tool("clear_cache", "broom", __("Clear cache"), "clear-cache · clear-website-cache")}
 					${tool("restart", "power", __("Restart bench"), __("Restarts web and background workers (supervisor)."), "", !h.restart_available,
-						h.restart_available ? "" : esc(__("Needs a one-time server setup: sudo bench setup production <user> (or sudo bench setup sudoers <user>). Until then run bench restart in the terminal.")))}
+						h.restart_available ? "" : esc(this.restartHint()))}
 				</div>
 			</div>`);
 		body.find(".ae-act").on("click", (e) => {
@@ -358,6 +358,12 @@ class adiSiteCarePage {
 		body.find(".em-toggle").on("click", () => this.switchAction("emails"));
 		body.find(".sc-toggle").on("click", () => this.switchAction("scheduler"));
 		body.find(".mm-on").on("click", () => this.switchAction("maintenance"));
+	}
+
+	restartHint() {
+		return this.data && this.data.health.dev_mode
+			? __("Development bench (bench start): press Ctrl+C in that terminal and run bench start again.")
+			: __("Restart needs a one-time server setup: sudo bench setup production [user] — or run bench restart in the terminal.");
 	}
 
 	// ============================================================ site switches (chips + Tools)
@@ -505,7 +511,12 @@ class adiSiteCarePage {
 			</div>
 			<div class="ae-bar ${tone} ${running ? "live" : ""}"><div style="width:${st.progress || 0}%"></div></div>
 			${st.error ? `<div class="ae-note bad">${ic("alert", 15)}<span>${esc(st.error)}</span></div>` : ""}
-			${st.type === "Restore" && st.status === "Success" ? `<div class="ae-note ok">${ic("check", 15)}<span>${__("Restore complete — the site is live.")} ${st.restarted ? "" : __("If anything looks stale, run After-restore tasks in Tools.")}</span></div>` : ""}
+			${st.type === "Restore" && st.status === "Success" ? `<div class="ae-note ok">${ic("check", 15)}<span>${__("Restore complete — the site is live.")} ${st.restarted ? "" : __("If anything looks stale, run After-restore tasks or restart.")}</span></div>
+				${st.restarted ? "" : `<div class="ae-links">
+					<button class="btn btn-default btn-xs ae-after" data-action="post_restore">${ic("restore", 13)} ${__("After-restore tasks")}</button>
+					<button class="btn btn-default btn-xs ae-after" data-action="restart" ${this.data && this.data.health.restart_available ? "" : "disabled"}>${ic("power", 13)} ${__("Restart bench")}</button>
+					${this.data && this.data.health.restart_available ? "" : `<small class="ae-muted" style="margin:0">${this.restartHint()}</small>`}
+				</div>`}` : ""}
 			${links ? `<div class="ae-links">${links}</div>` : ""}
 			<div class="ae-job-grid ${steps.length ? "" : "nosteps"}">
 				${steps.length ? `<div class="ae-steps">${steps.map((s) => `<div class="ae-step ${s.status}">
@@ -523,6 +534,13 @@ class adiSiteCarePage {
 		if (t) t.scrollTop = keepScroll ? prevScroll : t.scrollHeight;
 		$p.find(".ae-term-copy").on("click", () => frappe.utils.copy_to_clipboard(st.log || ""));
 		$p.find(".ae-close").on("click", () => { this.lastState = null; $p.empty(); });
+		$p.find(".ae-after").on("click", (e) => {
+			const action = $(e.currentTarget).data("action");
+			frappe.confirm(action === "restart" ? __("Restart bench now? Web and workers restart — a few seconds of downtime.") : __("Run migrate → clear cache → clear website cache → restart now?"), async () => {
+				const r = await frappe.call({ method: API + "start_action", args: { action }, freeze: true });
+				this.watch(r.message.job);
+			});
+		});
 	}
 
 	termHtml(text) {
