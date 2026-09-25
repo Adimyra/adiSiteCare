@@ -1,7 +1,7 @@
 // adiSiteCare — backup, restore and site tools from Desk (Frappe v15 / v16)
 frappe.pages["sitecare"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({ parent: wrapper, title: __("adiSiteCare"), single_column: true });
-	wrapper.sitecare = new AdiSiteCare(page);
+	wrapper.sitecare = new adiSiteCarePage(page);
 };
 frappe.pages["sitecare"].on_page_show = function (wrapper) {
 	wrapper.sitecare && wrapper.sitecare.data && !wrapper.sitecare.watching && wrapper.sitecare.load();
@@ -37,7 +37,7 @@ const P = {
 };
 const ic = (n, size = 16, extra = "") => `<svg class="ae-ic ${extra}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${P[n]}"/></svg>`;
 
-class AdiSiteCare {
+class adiSiteCarePage {
 	constructor(page) {
 		this.page = page;
 		this.$root = $(`<div class="ae"></div>`).appendTo(page.main);
@@ -494,7 +494,7 @@ class AdiSiteCare {
 .ae-hero code{background:rgba(255,255,255,.1);color:#fff}
 .ae-hero-main{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
 .ae-logo{width:58px;height:58px;border-radius:16px;display:grid;place-items:center;background:#fff;box-shadow:0 8px 20px -8px rgba(0,0,0,.5);overflow:hidden;flex:none}.ae-logo img{width:50px;height:50px;object-fit:contain}
-.ae-eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#a8dc8c;font-weight:600;text-shadow:0 0 12px rgba(168,220,140,.4)}
+.ae-eyebrow{font-size:12px;letter-spacing:.04em;color:#a8dc8c;font-weight:600;text-shadow:0 0 12px rgba(168,220,140,.4)}
 .ae-site{font-size:22px;font-weight:700;color:#fff;letter-spacing:-.01em}
 .ae-meta{font-size:12.5px;color:#94a3b8}
 .ae-disk{margin-left:auto;min-width:220px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 14px}
