@@ -55,7 +55,7 @@ class adiSiteCarePage {
 		this.render();
 		if (this.data.busy && !this.watching) {
 			const j = (this.data.jobs || []).find((x) => x.name === this.data.busy);
-			this.watch(this.data.busy, j && j.job_type === "Restore" ? j.status_token : undefined);
+			this.watch(this.data.busy, (j && j.status_token) || undefined);
 		}
 	}
 
@@ -70,7 +70,7 @@ class adiSiteCarePage {
 			<div class="ae-job"></div>
 			<div class="ae-body"></div>`);
 		this.$root.find(".ae-tabs button").on("click", (e) => { this.tab = $(e.currentTarget).data("tab"); this.render(); });
-		this.$root.find(".ae-chip[data-go]").on("click", (e) => { this.tab = $(e.currentTarget).data("go"); this.render(); });
+		this.$root.find(".ae-chip[data-sw]").on("click", (e) => this.switchAction($(e.currentTarget).data("sw")));
 		const body = this.$root.find(".ae-body");
 		({ backup: () => this.renderBackup(body), restore: () => this.renderRestore(body), tools: () => this.renderTools(body), history: () => this.renderHistory(body) })[this.tab]();
 		if (this.lastState) this.renderJob(this.lastState);
@@ -79,8 +79,8 @@ class adiSiteCarePage {
 	heroHtml() {
 		const d = this.data, h = d.health || {};
 		const usedPct = d.disk.pct_used, low = d.disk.free_bytes < 5 * 1024 ** 3;
-		const chip = (ok, icon, label, value, go, badTone) => `<div class="ae-chip ${ok ? "ok" : badTone || "warn"}" ${go ? `data-go="${go}" title="${__("Open Tools")}"` : ""}>
-			<span class="dot"></span>${ic(icon, 14)}<span class="l">${label}</span><b>${value}</b></div>`;
+		const chip = (ok, icon, label, value, sw, badTone, act) => `<div class="ae-chip ${ok ? "ok" : badTone || "warn"}" ${sw ? `data-sw="${sw}" role="button" title="${esc(act)}"` : ""}>
+			<span class="dot"></span>${ic(icon, 14)}<span class="l">${label}</span><b>${value}</b>${sw ? `<span class="ae-chip-act">${esc(act)}</span>` : ""}</div>`;
 		return `<div class="ae-hero">
 			<div class="ae-hero-main">
 				<div class="ae-logo"><img src="/assets/adisitecare/images/adiSiteCare_logo.png" alt="adiSiteCare"></div>
@@ -96,9 +96,9 @@ class adiSiteCarePage {
 				</div>
 			</div>
 			<div class="ae-chips">
-				${chip(!h.maintenance, "shield", __("Maintenance"), h.maintenance ? __("On") : __("Off"))}
-				${chip(!h.scheduler_paused, "clock", __("Scheduler"), h.scheduler_paused ? __("Paused") : __("Running"), "tools")}
-				${chip(!h.emails_muted, "mail", __("Emails"), h.emails_muted ? __("Muted") : __("Sending"), "tools")}
+				${chip(!h.maintenance, "shield", __("Maintenance"), h.maintenance ? __("On") : __("Off"), "maintenance", null, __("Turn on"))}
+				${chip(!h.scheduler_paused, "clock", __("Scheduler"), h.scheduler_disabled ? __("Disabled") : h.scheduler_paused ? __("Paused") : __("Running"), "scheduler", null, h.scheduler_paused ? __("Resume") : __("Pause"))}
+				${chip(!h.emails_muted, "mail", __("Emails"), h.emails_muted ? __("Muted") : __("Sending"), h.emails_muted_bench ? null : "emails", null, h.emails_muted ? __("Unmute") : __("Mute"))}
 				${chip(h.workers !== 0, "cpu", __("Workers"), h.workers == null ? "—" : h.workers, null, "bad")}
 			</div>
 			${h.workers === 0 ? `<div class="ae-note bad">${ic("alert", 15)}<span>${__("No background worker is running — jobs will wait in the queue. Start one with")} <code>bench worker</code> ${__("(supervisor does this in production).")}</span></div>` : ""}
@@ -318,16 +318,22 @@ class adiSiteCarePage {
 						<small>${h.emails_muted
 							? __("mute_emails = 1 — emails are still created but wait in the Email Queue instead of being sent. Unmuting sends everything that is waiting.")
 							: __("Emails are sent normally.")}</small>
-						${h.emails_muted && h.pending_emails ? `<label class="ae-check tight"><input type="checkbox" class="em-discard" checked><span><b>${__("Discard the {0} waiting emails when unmuting", [h.pending_emails])}</b><small>${__("Recommended on staging — they may be copies of production emails to real customers.")}</small></span></label>` : ""}
+						${h.emails_muted && h.pending_emails ? `<small class="t-warn">${__("{0} emails are waiting in the queue — you can discard them when unmuting.", [h.pending_emails])}</small>` : ""}
 						${h.emails_muted_bench ? `<small class="t-warn">${__("Muted for the whole bench in common_site_config.json — change it there.")}</small>` : ""}</div>
 					<button class="btn btn-sm ${h.emails_muted ? "btn-primary" : "btn-default"} em-toggle" ${h.emails_muted_bench ? "disabled" : ""}>${h.emails_muted ? __("Unmute emails") : __("Mute emails")}</button>
 				</div>
 				<div class="ae-switch">
 					<div class="ae-switch-ic ${h.scheduler_paused ? "warn" : "ok"}">${ic("clock", 20)}</div>
 					<div class="ae-switch-b"><b>${__("Scheduler")} · <span class="${h.scheduler_paused ? "t-warn" : "t-ok"}">${h.scheduler_paused ? __("Paused") : __("Running")}</span></b>
-						<small>${h.scheduler_paused ? __("pause_scheduler = 1 — scheduled jobs (auto emails, reminders, syncs, auto backups) don't run.") : __("Scheduled jobs run normally.")}</small>
+						<small>${h.scheduler_disabled ? __("Disabled in System Settings — scheduled jobs (auto emails, reminders, syncs, auto backups) don't run. Resume switches it back on.") : h.scheduler_paused ? __("pause_scheduler = 1 — scheduled jobs (auto emails, reminders, syncs, auto backups) don't run.") : __("Scheduled jobs run normally.")}</small>
 						${h.scheduler_paused_bench ? `<small class="t-warn">${__("Paused for the whole bench in common_site_config.json — change it there.")}</small>` : ""}</div>
 					<button class="btn btn-sm ${h.scheduler_paused ? "btn-primary" : "btn-default"} sc-toggle" ${h.scheduler_paused_bench ? "disabled" : ""}>${h.scheduler_paused ? __("Resume scheduler") : __("Pause scheduler")}</button>
+				</div>
+				<div class="ae-switch">
+					<div class="ae-switch-ic ${h.maintenance ? "warn" : "ok"}">${ic("shield", 20)}</div>
+					<div class="ae-switch-b"><b>${__("Maintenance mode")} · <span class="${h.maintenance ? "t-warn" : "t-ok"}">${h.maintenance ? __("On") : __("Off")}</span></b>
+						<small>${__("Everyone — you included — sees the maintenance page while it's on, so it runs for a set time and switches off by itself.")}</small></div>
+					<button class="btn btn-sm btn-default mm-on" ${d.busy ? "disabled" : ""}>${__("Turn on…")}</button>
 				</div>
 			</div>
 			<div class="ae-card">
@@ -349,19 +355,66 @@ class adiSiteCarePage {
 				this.load();
 			});
 		});
-		body.find(".em-toggle").on("click", async () => {
-			const r = await frappe.call({ method: API + "set_emails", freeze: true,
-				args: { muted: h.emails_muted ? 0 : 1, discard_pending: body.find(".em-discard").is(":checked") ? 1 : 0 } });
-			frappe.show_alert({ message: h.emails_muted ? __("Emails unmuted") + (r.message.discarded ? ` · ${__("{0} waiting emails discarded", [r.message.discarded])}` : "") : __("Emails muted"), indicator: "green" });
-			this.data.health = r.message.health;
-			this.render();
-		});
-		body.find(".sc-toggle").on("click", async () => {
-			const r = await frappe.call({ method: API + "set_scheduler", args: { paused: h.scheduler_paused ? 0 : 1 }, freeze: true });
-			frappe.show_alert({ message: h.scheduler_paused ? __("Scheduler resumed") : __("Scheduler paused"), indicator: "green" });
-			this.data.health = r.message.health;
-			this.render();
-		});
+		body.find(".em-toggle").on("click", () => this.switchAction("emails"));
+		body.find(".sc-toggle").on("click", () => this.switchAction("scheduler"));
+		body.find(".mm-on").on("click", () => this.switchAction("maintenance"));
+	}
+
+	// ============================================================ site switches (chips + Tools)
+	switchAction(sw) {
+		const h = this.data.health;
+		if (sw === "emails") {
+			if (!h.emails_muted)
+				return frappe.confirm(__("Mute outgoing emails? New emails wait in the Email Queue until you unmute."), () => this.setEmails(1, 0));
+			const d = new frappe.ui.Dialog({
+				title: __("Unmute emails"),
+				fields: [
+					{ fieldtype: "HTML", options: `<p class="text-muted">${__("Emails will be sent again.")} ${h.pending_emails ? __("{0} emails are waiting in the queue and would be sent now.", [h.pending_emails]) : ""}</p>` },
+					...(h.pending_emails ? [{ fieldname: "discard", fieldtype: "Check", default: 1,
+						label: __("Discard the {0} waiting emails first", [h.pending_emails]),
+						description: __("Recommended on staging — they may be copies of production emails to real customers.") }] : []),
+				],
+				primary_action_label: __("Unmute"),
+				primary_action: (v) => { d.hide(); this.setEmails(0, v.discard ? 1 : 0); },
+			});
+			return d.show();
+		}
+		if (sw === "scheduler") {
+			return frappe.confirm(h.scheduler_paused
+				? __("Resume the scheduler? Scheduled jobs (auto emails, reminders, syncs, auto backups) start running again.")
+				: __("Pause the scheduler? Scheduled jobs stop until you resume."), async () => {
+				const r = await frappe.call({ method: API + "set_scheduler", args: { paused: h.scheduler_paused ? 0 : 1 }, freeze: true });
+				frappe.show_alert({ message: h.scheduler_paused ? __("Scheduler resumed") : __("Scheduler paused"), indicator: "green" });
+				this.data.health = r.message.health;
+				this.render();
+			});
+		}
+		if (sw === "maintenance") {
+			if (h.maintenance) return;
+			if (this.data.busy) return frappe.msgprint(__("Another job is running — wait for it to finish."));
+			const d = new frappe.ui.Dialog({
+				title: __("Turn on maintenance mode"),
+				fields: [
+					{ fieldtype: "HTML", options: `<div class="ae-note warn" style="margin-bottom:10px;background:rgba(217,119,6,.11);color:#b45309">${ic("alert", 15)}<span>${__("Everyone sees the maintenance page — <b>you included</b>. It can't be switched off from here while it's on, so it switches off automatically when the time is up. This page shows a countdown.")}</span></div>` },
+					{ fieldname: "minutes", fieldtype: "Select", label: __("For how long?"), options: "5\n15\n30\n60", default: "15", description: __("minutes · to end early, run on the server: bench --site {0} set-maintenance-mode off", [this.data.site]) },
+				],
+				primary_action_label: __("Turn on"),
+				primary_action: async (v) => {
+					d.hide();
+					const r = await frappe.call({ method: API + "start_maintenance", args: { minutes: v.minutes }, freeze: true });
+					this.watch(r.message.job, r.message.token);
+				},
+			});
+			d.get_primary_btn().removeClass("btn-primary").addClass("btn-danger");
+			return d.show();
+		}
+	}
+
+	async setEmails(muted, discard) {
+		const r = await frappe.call({ method: API + "set_emails", freeze: true, args: { muted, discard_pending: discard } });
+		frappe.show_alert({ message: muted ? __("Emails muted") : __("Emails unmuted") + (r.message.discarded ? ` · ${__("{0} waiting emails discarded", [r.message.discarded])}` : ""), indicator: "green" });
+		this.data.health = r.message.health;
+		this.render();
 	}
 
 	// ============================================================ history tab
@@ -381,7 +434,7 @@ class adiSiteCarePage {
 					${j.error ? `<small class="t-bad">${esc(j.error.slice(0, 140))}</small>` : ""}
 				</div>
 				${j.db_file ? `<a class="btn btn-default btn-xs" href="${dl(j.db_file)}">${ic("down", 13)} ${__("Database")}</a>` : ""}
-				<button class="btn btn-default btn-xs hs-log" data-job="${esc(j.name)}" data-token="${esc(j.job_type === "Restore" && (j.status === "Queued" || j.status === "Running") ? j.status_token || "" : "")}">${j.status === "Queued" || j.status === "Running" ? __("Show progress") : __("View log")}</button>
+				<button class="btn btn-default btn-xs hs-log" data-job="${esc(j.name)}" data-token="${esc(j.status === "Queued" || j.status === "Running" ? j.status_token || "" : "")}">${j.status === "Queued" || j.status === "Running" ? __("Show progress") : __("View log")}</button>
 			</div>`).join("")}</div>` : `<div class="ae-empty">${ic("history", 28)}<div>${__("Nothing yet.")}</div></div>`}
 		</div>`);
 		body.find(".hs-log").on("click", (e) => {
@@ -515,7 +568,7 @@ class adiSiteCarePage {
 .ae-disk-sub{font-size:11px;color:#64748b}
 .ae-chips{display:flex;gap:8px;flex-wrap:wrap}
 .ae-chip{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);font-size:12.5px;color:#cbd5e1}
-.ae-chip[data-go]{cursor:pointer}.ae-chip[data-go]:hover{background:rgba(255,255,255,.13)}
+.ae-chip[data-sw]{cursor:pointer;transition:.15s}.ae-chip[data-sw]:hover{background:rgba(255,255,255,.14);border-color:rgba(168,220,140,.45);box-shadow:0 0 14px rgba(143,194,122,.25)}.ae-chip-act{font-size:11px;font-weight:600;color:#a8dc8c;padding-left:8px;margin-left:2px;border-left:1px solid rgba(255,255,255,.15)}
 .ae-chip b{color:#fff;font-weight:600}.ae-chip .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;box-shadow:0 0 0 3px rgba(34,197,94,.2)}
 .ae-chip.warn .dot{background:#f59e0b;box-shadow:0 0 0 3px rgba(245,158,11,.25)}.ae-chip.bad .dot{background:#ef4444;box-shadow:0 0 0 3px rgba(239,68,68,.25)}
 .ae-hero .ae-note{background:rgba(255,255,255,.07);color:#fde68a}

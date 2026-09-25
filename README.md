@@ -52,8 +52,11 @@ a site back to an earlier backup on the same server.
 - Progress keeps updating even while the site is in maintenance mode
 
 ### 🛠️ Tools
-- **Site switches** — mute / unmute outgoing emails, pause / resume the scheduler.
-  When unmuting, emails waiting in the queue can be discarded first
+- **Site switches** — one click from the health bar or the Tools tab:
+  - **Emails** — mute / unmute; when unmuting, emails waiting in the queue can be discarded first
+  - **Scheduler** — pause / resume (also re-enables it if it was disabled in System Settings)
+  - **Maintenance mode** — on for 5 / 15 / 30 / 60 minutes with a live countdown, then off automatically
+    (Frappe blocks every request during maintenance — this page too — so it always switches itself off)
 - **After-restore tasks** — migrate → clear cache → clear website cache → restart, in one click
 - **Migrate**, **Clear cache**, **Restart bench** — each with the live terminal
 

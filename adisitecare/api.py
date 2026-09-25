@@ -53,6 +53,11 @@ def _stats(backups):
 	}
 
 
+def _scheduler_disabled():
+	"""Scheduler switched off in System Settings (bench scheduler disable) or by disable_scheduler in config."""
+	return bool(cint(frappe.get_conf().get("disable_scheduler")) or not cint(frappe.get_system_settings("enable_scheduler")))
+
+
 def _health():
 	conf = runner.site_config()
 	common = frappe.get_conf()
@@ -71,7 +76,8 @@ def _health():
 		cache.set_value(f"{runner.APP}:restart_ok", restart, expires_in_sec=600)
 	return {
 		"maintenance": bool(cint(conf.get("maintenance_mode"))),
-		"scheduler_paused": bool(cint(conf.get("pause_scheduler")) or cint(common.get("pause_scheduler"))),
+		"scheduler_paused": bool(cint(conf.get("pause_scheduler")) or cint(common.get("pause_scheduler")) or _scheduler_disabled()),
+		"scheduler_disabled": _scheduler_disabled(),
 		"scheduler_paused_bench": bool(cint(common.get("pause_scheduler")) and not cint(conf.get("pause_scheduler"))),
 		"emails_muted": bool(cint(conf.get("mute_emails"))),
 		"emails_muted_bench": bool(cint(common.get("mute_emails")) and not cint(conf.get("mute_emails"))),
@@ -365,7 +371,34 @@ def set_scheduler(paused: int | str) -> dict:
 	from frappe.installer import update_site_config
 
 	update_site_config("pause_scheduler", 1 if cint(paused) else 0)
+	if not cint(paused) and not cint(frappe.get_system_settings("enable_scheduler")):
+		from frappe.utils.scheduler import enable_scheduler
+
+		enable_scheduler()  # also switched off in System Settings — switch it on there too
+		frappe.db.commit()
 	return {"health": _health()}
+
+
+@frappe.whitelist(methods=["POST"])
+def start_maintenance(minutes: int | str) -> dict:
+	"""Maintenance mode for a fixed time. While it's on, Frappe blocks every request (this page too),
+	so it can't be switched off from here — a background job switches it off when the time is up."""
+	_require()
+	minutes = cint(minutes)
+	if minutes not in (5, 15, 30, 60):
+		frappe.throw(_("Choose 5, 15, 30 or 60 minutes."))
+	if _busy_job():
+		frappe.throw(_("Another job is already running — wait for it to finish."))
+	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Action", "action": _("Maintenance window"), "status": "Queued",
+		"stage": "Queued", "requested_by": frappe.session.user, "started_on": now_datetime(), "status_token": frappe.generate_hash(length=32)})
+	doc.insert(ignore_permissions=True)
+	runner.cleanup_status_files()
+	runner.new_state(doc.name, "Action", action="maintenance", title=_("Maintenance mode · {0} min").format(minutes), minutes=minutes,
+		token=doc.status_token, user=frappe.session.user,
+		steps=runner.make_steps([("on", "Maintenance mode on"), ("window", f"Maintenance window · {minutes} min"), ("off", "Maintenance mode off")]))
+	frappe.db.commit()
+	frappe.enqueue("adisitecare.runner.run_maintenance", queue="long", timeout=minutes * 60 + 900, job=doc.name, enqueue_after_commit=True)
+	return {"job": doc.name, "token": doc.status_token}
 
 
 def has_app_permission():

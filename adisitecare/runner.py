@@ -342,6 +342,54 @@ def run_action(job):
 	_notify(state)
 
 
+def run_maintenance(job):
+	"""Maintenance mode on for N minutes, then off again — always off at the end, even on errors."""
+	state = read_state(job)
+	if not state:
+		return
+	minutes = int(state.get("minutes") or 15)
+	state.update(status="Running", started=str(now_datetime()))
+	save_record(state, {"started_on": state["started"]})
+	switched_on = False
+	try:
+		set_step(state, "on")
+		run(state, _frappe_cmd("set-maintenance-mode", "on"), "Maintenance mode on", 2, 5, 10)
+		switched_on = True
+		if not int(site_config().get("maintenance_mode") or 0):
+			raise RuntimeError("Maintenance mode did not switch on.")
+		log(state, f"✓ Maintenance mode is ON — users see the maintenance page for {minutes} minutes.")
+		set_step(state, "window")
+		end = time.time() + minutes * 60
+		while time.time() < end:
+			if not int(site_config().get("maintenance_mode") or 0):
+				log(state, "↻ Maintenance mode was switched off on the server — ending early.")
+				break
+			left = int(end - time.time())
+			state.update(stage=f"Back online in {left // 60}:{left % 60:02d}", progress=5 + int(90 * (1 - left / (minutes * 60))),
+				ends_at=end)
+			write_state(state)
+			time.sleep(5)
+		set_step(state, "off")
+	except Exception as e:
+		state["error"] = str(e)
+		log(state, f"✗ {e}")
+	finally:
+		if switched_on or int(site_config().get("maintenance_mode") or 0):
+			subprocess.run(_frappe_cmd("set-maintenance-mode", "off"), cwd=os.path.join(get_bench_path(), "sites"), capture_output=True)
+			log(state, "\n$ bench --site {0} set-maintenance-mode off".format(frappe.local.site))
+		back = not int(site_config().get("maintenance_mode") or 0)
+		if back:
+			log(state, "✓ Maintenance mode is OFF — the site is back online.")
+		finish_steps(state, back and not state.get("error"))
+		state.update(status="Success" if back and not state.get("error") else "Failed", progress=100 if back else state["progress"],
+			stage="Site back online" if back else "Maintenance mode still ON", finished=str(now_datetime()))
+		if not back:
+			state["error"] = (state.get("error") or "") + f" Run on the server: bench --site {frappe.local.site} set-maintenance-mode off"
+		write_state(state)
+		save_record(state)
+		_notify(state)
+
+
 # ---------------------------------------------------------------- backup
 
 
