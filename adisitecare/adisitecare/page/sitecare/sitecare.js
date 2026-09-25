@@ -342,15 +342,16 @@ class adiSiteCarePage {
 				<div class="ae-card-head"><div><h3>${__("Run a command")}</h3><p>${__("Runs in the background with the live terminal — same as typing it on the server.")}</p></div></div>
 				<div class="ae-tools">
 					${tool("post_restore", "restore", __("After-restore tasks"), __("migrate → clear-cache → clear-website-cache → restart. Use it if you restored without restart, or something looks stale."), "hi", false,
-						h.restart_available ? "" : esc(__("Restart is skipped here.") + " " + this.restartHint()))}
+						h.restart_available ? "" : esc(__("Restart is skipped in this run.") + " " + (h.supervisor ? __("Use Restart bench afterwards — it asks for the server password.") : this.restartHint())))}
 					${tool("migrate", "migrate", __("Migrate"), "bench --site " + esc(d.site) + " migrate · " + __("then clears the cache"))}
 					${tool("clear_cache", "broom", __("Clear cache"), "clear-cache · clear-website-cache")}
-					${tool("restart", "power", __("Restart bench"), __("Restarts web and background workers (supervisor)."), "", !h.restart_available,
-						h.restart_available ? "" : esc(this.restartHint()))}
+					${tool("restart", "power", __("Restart bench"), __("Restarts web and background workers (supervisor)."), "", !(h.restart_available || h.supervisor),
+						h.restart_available ? "" : h.supervisor ? esc(__("Asks for the server (sudo) password — used once, never saved.")) : esc(this.restartHint()))}
 				</div>
 			</div>`);
 		body.find(".ae-act").on("click", (e) => {
 			const $b = $(e.currentTarget);
+			if ($b.data("action") === "restart") return this.restart();
 			frappe.confirm(__("Run {0} now?", [`<b>${esc($b.data("label"))}</b>`]), async () => {
 				const r = await frappe.call({ method: API + "start_action", args: { action: $b.data("action") }, freeze: true });
 				this.watch(r.message.job);
@@ -360,6 +361,63 @@ class adiSiteCarePage {
 		body.find(".em-toggle").on("click", () => this.switchAction("emails"));
 		body.find(".sc-toggle").on("click", () => this.switchAction("scheduler"));
 		body.find(".mm-on").on("click", () => this.switchAction("maintenance"));
+	}
+
+	restart() {
+		const h = this.data.health;
+		if (h.restart_available) {
+			return frappe.confirm(__("Restart bench now? Web and workers restart — a few seconds of downtime."), async () => {
+				const r = await frappe.call({ method: API + "start_action", args: { action: "restart" }, freeze: true });
+				this.watch(r.message.job);
+			});
+		}
+		if (!h.supervisor) return frappe.msgprint({ title: __("Restart bench"), message: esc(this.restartHint()) });
+		const insecure = location.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(location.hostname);
+		const d = new frappe.ui.Dialog({
+			title: __("Restart bench"),
+			fields: [
+				{ fieldtype: "HTML", options: `<p class="text-muted" style="margin-bottom:8px">${__("This server needs sudo to control supervisor. The password is used once for")}
+					<code>sudo supervisorctl restart</code> ${__("(web + workers of this bench) — it is not saved or logged.")}</p>
+					${insecure ? `<div class="ae-note warn" style="background:rgba(217,119,6,.11);color:#b45309;margin-bottom:8px">${ic("alert", 15)}<span>${__("This page is not on HTTPS — the password would travel unencrypted. Prefer running bench restart on the server.")}</span></div>` : ""}` },
+				{ fieldname: "sudo_password", fieldtype: "Password", reqd: 1, label: __("Server password (sudo) for {0}", [h.os_user || __("the bench user")]) },
+			],
+			primary_action_label: __("Restart"),
+			primary_action: async (v) => {
+				d.get_primary_btn().prop("disabled", true);
+				try {
+					const r = await frappe.call({ method: API + "restart_with_password", args: { sudo_password: v.sudo_password } });
+					d.hide();
+					this.waitForRestart((r.message.groups || []).join(", "));
+				} finally {
+					d.get_primary_btn().prop("disabled", false);
+					d.set_value("sudo_password", "");
+				}
+			},
+		});
+		d.show();
+	}
+
+	waitForRestart(groups) {
+		const msg = frappe.msgprint({ title: __("Restarting…"), indicator: "blue",
+			message: `${__("Restarting")} <code>${esc(groups)}</code> — ${__("this page reconnects by itself.")}` });
+		const t0 = Date.now();
+		let wentDown = false;
+		const tick = async () => {
+			let ok = false;
+			try { ok = (await fetch("/api/method/ping", { cache: "no-store" })).ok; } catch (e) { ok = false; }
+			if (!ok) wentDown = true;
+			if (ok && (wentDown || Date.now() - t0 > 12000)) {
+				clearInterval(this._rp);
+				msg && msg.hide && msg.hide();
+				frappe.show_alert({ message: __("Bench restarted — back online"), indicator: "green" });
+				this.load();
+			} else if (Date.now() - t0 > 180000) {
+				clearInterval(this._rp);
+				frappe.msgprint(__("The site hasn't come back after 3 minutes — check the server (sudo supervisorctl status)."));
+			}
+		};
+		clearInterval(this._rp);
+		this._rp = setInterval(tick, 2000);
 	}
 
 	restartHint() {
@@ -516,8 +574,8 @@ class adiSiteCarePage {
 			${st.type === "Restore" && st.status === "Success" ? `<div class="ae-note ok">${ic("check", 15)}<span>${__("Restore complete — the site is live.")} ${st.restarted ? "" : __("If anything looks stale, run After-restore tasks or restart.")}</span></div>
 				${st.restarted ? "" : `<div class="ae-links">
 					<button class="btn btn-default btn-xs ae-after" data-action="post_restore">${ic("restore", 13)} ${__("After-restore tasks")}</button>
-					<button class="btn btn-default btn-xs ae-after" data-action="restart" ${this.data && this.data.health.restart_available ? "" : "disabled"}>${ic("power", 13)} ${__("Restart bench")}</button>
-					${this.data && this.data.health.restart_available ? "" : `<small class="ae-muted" style="margin:0">${this.restartHint()}</small>`}
+					<button class="btn btn-default btn-xs ae-after" data-action="restart" ${this.data && (this.data.health.restart_available || this.data.health.supervisor) ? "" : "disabled"}>${ic("power", 13)} ${__("Restart bench")}</button>
+					${this.data && !(this.data.health.restart_available || this.data.health.supervisor) ? `<small class="ae-muted" style="margin:0">${this.restartHint()}</small>` : ""}
 				</div>`}` : ""}
 			${links ? `<div class="ae-links">${links}</div>` : ""}
 			<div class="ae-job-grid ${steps.length ? "" : "nosteps"}">
@@ -538,6 +596,7 @@ class adiSiteCarePage {
 		$p.find(".ae-close").on("click", () => { this.lastState = null; $p.empty(); });
 		$p.find(".ae-after").on("click", (e) => {
 			const action = $(e.currentTarget).data("action");
+			if (action === "restart") return this.restart();
 			frappe.confirm(action === "restart" ? __("Restart bench now? Web and workers restart — a few seconds of downtime.") : __("Run migrate → clear cache → clear website cache → restart now?"), async () => {
 				const r = await frappe.call({ method: API + "start_action", args: { action }, freeze: true });
 				this.watch(r.message.job);

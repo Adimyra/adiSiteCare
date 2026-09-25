@@ -4,6 +4,7 @@ user's password and the site name, like any destructive operation should."""
 import os
 import re
 import shutil
+import subprocess
 import time
 
 import frappe
@@ -85,6 +86,8 @@ def _health():
 		"workers": workers,
 		"restart_available": restart,
 		"dev_mode": bool(cint(frappe.get_conf().get("developer_mode"))),
+		"supervisor": bool(shutil.which("supervisorctl")),
+		"os_user": _os_user(),
 	}
 
 
@@ -400,6 +403,61 @@ def start_maintenance(minutes: int | str) -> dict:
 	frappe.db.commit()
 	frappe.enqueue("adisitecare.runner.run_maintenance", queue="long", timeout=minutes * 60 + 900, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name, "token": doc.status_token}
+
+
+def _os_user():
+	import getpass
+
+	try:
+		return getpass.getuser()
+	except Exception:
+		return ""
+
+
+def _sudo(cmd, password, timeout=40):
+	"""Run one command with sudo, the password fed on stdin (-S) — never on the command line, never stored."""
+	return subprocess.run(["sudo", "-S", "-k", "-p", "", *cmd], input=password + "\n", capture_output=True, text=True, timeout=timeout)
+
+
+@frappe.whitelist(methods=["POST"])
+def restart_with_password(sudo_password: str) -> dict:
+	"""bench restart for servers where supervisor needs sudo: restart this bench's web + worker programs
+	with `sudo supervisorctl restart`. The password is used for this request only — not saved, not logged."""
+	_require()
+	password = sudo_password
+	frappe.form_dict.pop("sudo_password", None)  # keep it out of any error log / request dump
+	if not shutil.which("supervisorctl"):
+		frappe.throw(_("Supervisor isn't installed on this server (a development bench with bench start?). "
+			"Stop bench start with Ctrl+C and run bench start again."))
+	if _busy_job():
+		frappe.throw(_("Another job is running — wait for it to finish."))
+	try:
+		status = _sudo(["supervisorctl", "status"], password)
+	except subprocess.TimeoutExpired:
+		frappe.throw(_("sudo didn't answer — check that this user can use sudo."))
+	err = (status.stderr or "").lower()
+	if status.returncode not in (0, 3) or "incorrect password" in err or "sorry" in err:
+		if "incorrect password" in err or "sorry" in err or "password" in err:
+			frappe.throw(_("Wrong password, or this user ({0}) may not use sudo.").format(_os_user()), title=_("Restart failed"))
+		frappe.throw(_("supervisorctl failed: {0}").format(frappe.utils.escape_html((status.stderr or status.stdout)[:300])), title=_("Restart failed"))
+	bench = os.path.basename(get_bench_path())
+	groups = sorted({line.split()[0].split(":")[0] for line in status.stdout.splitlines()
+		if line.strip() and line.split()[0].startswith(bench)})
+	groups = [g for g in groups if "redis" not in g]  # like bench restart: web + workers, not redis
+	if not groups:
+		frappe.throw(_("No supervisor programs found for this bench ({0}).").format(bench))
+	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Action", "action": _("Restart bench"), "status": "Success",
+		"stage": _("Restart started"), "progress": 100, "requested_by": frappe.session.user, "started_on": now_datetime(),
+		"finished_on": now_datetime(), "log": "$ sudo supervisorctl restart " + " ".join(g + ":" for g in groups) + "\n↻ Restart started."})
+	doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+	# detached, last — it restarts this very web process too
+	proc = subprocess.Popen(["sudo", "-S", "-k", "-p", "", "supervisorctl", "restart", *[g + ":" for g in groups]],
+		stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, text=True)
+	proc.stdin.write(password + "\n")
+	proc.stdin.close()
+	del password
+	return {"groups": groups, "job": doc.name}
 
 
 def has_app_permission():
