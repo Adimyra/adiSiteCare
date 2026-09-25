@@ -49,7 +49,8 @@ a site back to an earlier backup on the same server.
   6. Back online — maintenance off, scheduler resumed
   7. Optional `bench restart`
 - **Staging mode** — keeps outgoing emails muted and the scheduler paused, so production data on a
-  staging site never emails real customers
+  staging site never emails real customers — and shows the **staging banner** on the website
+- **Knows when the backup was taken** — read from the dump itself (`Dump completed on …`), not the file or upload time
 - Progress keeps updating even while the site is in maintenance mode
 
 ### 🛠️ Tools
@@ -58,6 +59,12 @@ a site back to an earlier backup on the same server.
   - **Scheduler** — pause / resume (also re-enables it if it was disabled in System Settings)
   - **Maintenance mode** — on for 5 / 15 / 30 / 60 minutes with a live countdown, then off automatically
     (Frappe blocks every request during maintenance — this page too — so it always switches itself off)
+- **Staging banner** — a thin **STAGING** strip above the website navbar: *"Test site — please don't place orders
+  or make payments"* with **Database backup · date · time** of the restored data. Turned on automatically by a
+  staging restore, or from the dashboard with a live desktop preview. Uses *Website Settings → Banner HTML* and
+  keeps any other banner content
+- **Restart bench** — detected automatically: restarts `bench start` on development, runs `bench restart` on
+  production (asks the system user password when supervisor needs sudo — used once, never saved)
 - **After-restore tasks** — migrate → clear cache → clear website cache → restart, in one click
 - **Migrate**, **Clear cache**, **Restart bench** — each with the live terminal
 
