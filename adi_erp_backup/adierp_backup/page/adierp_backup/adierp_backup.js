@@ -154,7 +154,8 @@ class AdiErpBackup {
 				<label style="display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-staging" style="margin-top:3px"> <span>${__("This is a staging / test copy")} <span class="muted">— ${__("keep emails muted and the scheduler paused, so production data here never emails real customers")}</span></span></label>
 				<div class="grid2">
 					<label class="f">${__("Type the site name to confirm")} *<input type="text" class="form-control rs-site" placeholder="${esc(d.site)}" autocomplete="off"></label>
-					<label class="f">${__("Your password")} *<input type="password" class="form-control rs-pwd" autocomplete="current-password"></label>
+					<label class="f">${__("Your login password")} *<input type="password" class="form-control rs-pwd" autocomplete="current-password">
+						<span class="up">${__("The password you sign in to this site with ({0}) — not the database or server password.", [esc(frappe.session.user)])}</span></label>
 				</div>
 				<label style="display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-restart" style="margin-top:3px"> <span>${__("Restart bench after restore")} <span class="muted">— ${__("usually not needed. Works only on servers set up with bench setup production / sudoers; otherwise it is skipped (no password is ever asked).")}</span></span></label>
 				<div><button class="btn btn-danger btn-sm rs-go" ${d.busy ? "disabled" : ""}>${__("Start restore")}</button></div>
@@ -201,7 +202,7 @@ class AdiErpBackup {
 		if (!body.find(".rs-file[data-kind=db]")[0].files[0] && !body.find(".rs-pick[data-kind=db]").val())
 			return frappe.msgprint(__("Choose or upload the database backup."));
 		if (site !== this.data.site) return frappe.msgprint(__("Type the site name exactly: {0}", [this.data.site]));
-		if (!pwd) return frappe.msgprint(__("Enter your password."));
+		if (!pwd) return frappe.msgprint(__("Enter your login password for this site."));
 		const $btn = body.find(".rs-go").prop("disabled", true);
 		try {
 			const db = await refOf("db");

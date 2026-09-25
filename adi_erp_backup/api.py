@@ -226,7 +226,7 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 	try:
 		check_password(frappe.session.user, password)
 	except frappe.AuthenticationError:
-		frappe.throw(_("Your password is incorrect."))
+		frappe.throw(_("Your login password is incorrect."))
 	if _busy_job():
 		frappe.throw(_("Another backup or restore is already running — wait for it to finish."))
 
