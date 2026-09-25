@@ -133,15 +133,17 @@ class adiSiteCarePage {
 	renderBackup(body) {
 		const d = this.data;
 		const tile = (v, icon, t, s) => `<label class="ae-tile ${this.opt.withFiles === v ? "on" : ""}"><input type="radio" name="bk" value="${v}" ${this.opt.withFiles === v ? "checked" : ""}>
-			<span class="ae-tile-ic">${ic(icon, 20)}</span><span><b>${t}</b><small>${s}</small></span></label>`;
+			<span class="ae-radio"></span><span class="ae-tile-ic">${ic(icon, 20)}</span><span><b>${t}</b><small>${s}</small></span></label>`;
 		body.html(`
 			<div class="ae-card">
 				<div class="ae-card-head"><div><h3>${__("Create a backup")}</h3><p>${__("Runs")} <code>bench --site ${esc(d.site)} backup</code> ${__("in the background — you can leave this page, you'll get a notification.")}</p></div></div>
+				<h4>${__("What do you want to back up?")}</h4>
 				<div class="ae-tiles">
 					${tile(0, "db", __("Database only"), __("Fast · all data, no attachments"))}
 					${tile(1, "files", __("Database + files"), __("--with-files · public & private attachments"))}
 				</div>
-				<div class="ae-actions"><button class="btn btn-primary ae-btn bk-go" ${d.busy ? "disabled" : ""}>${ic("db", 15)} ${__("Start backup")}</button>
+				<div class="ae-actions"><button class="btn btn-primary ae-btn bk-go" ${d.busy ? "disabled" : ""}>${ic(this.opt.withFiles ? "files" : "db", 15)} ${this.opt.withFiles ? __("Back up database + files") : __("Back up database")}</button>
+					<code class="ae-muted" style="margin:0">bench --site ${esc(d.site)} backup${this.opt.withFiles ? " --with-files" : ""}</code>
 					${d.busy ? `<span class="ae-muted">${__("A job is running…")}</span>` : ""}</div>
 			</div>
 			<div class="ae-card">
@@ -604,6 +606,7 @@ class adiSiteCarePage {
 .ae-tile{display:flex;gap:12px;align-items:center;border:1.5px solid var(--border-color);border-radius:13px;padding:14px 16px;cursor:pointer;margin:0;transition:.15s;font-weight:400}
 .ae-tile input{display:none}.ae-tile b{display:block;font-size:13.5px}.ae-tile small{color:var(--text-muted);font-size:12px}
 .ae-tile:hover{border-color:var(--gray-400,#9ca3af)}.ae-tile.on{border-color:var(--ae-accent);background:rgba(77,100,67,.05);box-shadow:0 0 0 3px rgba(77,100,67,.1)}
+.ae-radio{width:18px;height:18px;border-radius:50%;border:2px solid var(--border-color);flex:none;position:relative}.ae-tile.on .ae-radio{border-color:var(--ae-accent)}.ae-tile.on .ae-radio:after{content:'';position:absolute;inset:3px;border-radius:50%;background:var(--ae-accent)}
 .ae-tile-ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--control-bg);color:var(--text-muted);flex:none}.ae-tile.on .ae-tile-ic{background:linear-gradient(135deg,#112921,#4D6443);color:#fff;box-shadow:0 6px 14px -6px rgba(77,100,67,.8)}
 .ae-list{display:flex;flex-direction:column}
 .ae-row{display:flex;align-items:center;gap:14px;padding:12px 4px;border-top:1px solid var(--border-color);flex-wrap:wrap}.ae-row:first-child{border-top:none}
