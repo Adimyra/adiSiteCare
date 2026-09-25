@@ -53,3 +53,19 @@ jspm_packages/
 
 # Aider AI Chat
 .aider*
+
+# Never commit site data or secrets
+*.sql
+*.sql.gz
+*.tar
+*.tgz
+*.tar.gz
+*.dump
+site_config*.json
+common_site_config.json
+*-site_config_backup.json
+*.pem
+*.key
+.env*
+private-notes/
+backups/
