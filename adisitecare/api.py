@@ -87,6 +87,7 @@ def _health():
 		"restart_available": restart,
 		"dev_mode": bool(cint(frappe.get_conf().get("developer_mode"))),
 		"supervisor": bool(shutil.which("supervisorctl")),
+		"bench_start": bool(_honcho_pid()),
 		"os_user": _os_user(),
 	}
 
@@ -412,6 +413,47 @@ def _os_user():
 		return getpass.getuser()
 	except Exception:
 		return ""
+
+
+def _honcho_pid():
+	"""PID of `bench start` (honcho) if this web process runs under it — i.e. a development bench."""
+	pid = os.getpid()
+	for _ in range(8):
+		out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+		if not out.isdigit() or int(out) <= 1:
+			return None
+		pid = int(out)
+		cmd = subprocess.run(["ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
+		if "honcho" in cmd:
+			return pid
+	return None
+
+
+@frappe.whitelist(methods=["POST"])
+def restart_dev() -> dict:
+	"""Development bench: stop `bench start` and start it again in the background (log: logs/bench-start.log)."""
+	_require()
+	import shlex
+
+	pid = _honcho_pid()
+	if not pid:
+		frappe.throw(_("This site isn't running under bench start, so it can't be restarted from here."))
+	if _busy_job():
+		frappe.throw(_("Another job is running — wait for it to finish."))
+	bench_path = get_bench_path()
+	bench_cli = shutil.which("bench") or os.path.expanduser("~/.local/bin/bench")
+	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Action", "action": _("Restart bench"), "status": "Success",
+		"stage": _("Restart started"), "progress": 100, "requested_by": frappe.session.user, "started_on": now_datetime(),
+		"finished_on": now_datetime(), "log": f"$ bench start   (stopped PID {pid}, started again in the background)\n"
+		"↻ Output: logs/bench-start.log"})
+	doc.insert(ignore_permissions=True)
+	frappe.db.commit()
+	script = (f"kill -INT {pid}; for i in $(seq 1 60); do kill -0 {pid} 2>/dev/null || break; sleep 1; done; sleep 2; "
+		f"cd {shlex.quote(bench_path)} && echo \"--- restarted by adiSiteCare $(date) ---\" >> logs/bench-start.log && "
+		f"exec {shlex.quote(bench_cli)} start >> logs/bench-start.log 2>&1")
+	subprocess.Popen(["/bin/sh", "-c", script], cwd=bench_path, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+		stderr=subprocess.DEVNULL, start_new_session=True)
+	return {"job": doc.name, "log": "logs/bench-start.log"}
 
 
 def _sudo(cmd, password, timeout=40):

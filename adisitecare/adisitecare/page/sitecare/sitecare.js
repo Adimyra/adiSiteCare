@@ -342,11 +342,11 @@ class adiSiteCarePage {
 				<div class="ae-card-head"><div><h3>${__("Run a command")}</h3><p>${__("Runs in the background with the live terminal — same as typing it on the server.")}</p></div></div>
 				<div class="ae-tools">
 					${tool("post_restore", "restore", __("After-restore tasks"), __("migrate → clear-cache → clear-website-cache → restart. Use it if you restored without restart, or something looks stale."), "hi", false,
-						h.restart_available ? "" : esc(__("Restart is skipped in this run.") + " " + (h.supervisor ? __("Use Restart bench afterwards — it asks for the server password.") : this.restartHint())))}
+						h.restart_available ? "" : esc(__("Restart is skipped in this run.") + " " + (h.supervisor || h.bench_start ? __("Use Restart bench afterwards.") : this.restartHint())))}
 					${tool("migrate", "migrate", __("Migrate"), "bench --site " + esc(d.site) + " migrate · " + __("then clears the cache"))}
 					${tool("clear_cache", "broom", __("Clear cache"), "clear-cache · clear-website-cache")}
-					${tool("restart", "power", __("Restart bench"), __("Restarts web and background workers (supervisor)."), "", !(h.restart_available || h.supervisor),
-						h.restart_available ? "" : h.supervisor ? esc(__("Asks for the server (sudo) password — used once, never saved.")) : esc(this.restartHint()))}
+					${tool("restart", "power", __("Restart bench"), h.bench_start && !h.supervisor ? __("Development bench: stops bench start and starts it again.") : __("Restarts web and background workers (bench restart)."), "", !(h.restart_available || h.supervisor || h.bench_start),
+						h.restart_available ? "" : h.supervisor ? esc(__("Asks for the system user's password — used once, never saved.")) : h.bench_start ? esc(__("Runs in the background afterwards — output in logs/bench-start.log.")) : esc(this.restartHint()))}
 				</div>
 			</div>`);
 		body.find(".ae-act").on("click", (e) => {
@@ -371,15 +371,23 @@ class adiSiteCarePage {
 				this.watch(r.message.job);
 			});
 		}
+		if (!h.supervisor && h.bench_start) {
+			return frappe.confirm(`<div style="line-height:1.6">${__("Development bench: stop <b>bench start</b> and start it again?")}<br>
+				<span class="text-muted">${__("It keeps running in the background afterwards — output goes to")} <code>logs/bench-start.log</code>.
+				${__("The terminal where it ran now will show it stopped.")}</span></div>`, async () => {
+				await frappe.call({ method: API + "restart_dev", freeze: true });
+				this.waitForRestart("bench start");
+			});
+		}
 		if (!h.supervisor) return frappe.msgprint({ title: __("Restart bench"), message: esc(this.restartHint()) });
 		const insecure = location.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(location.hostname);
 		const d = new frappe.ui.Dialog({
 			title: __("Restart bench"),
 			fields: [
-				{ fieldtype: "HTML", options: `<p class="text-muted" style="margin-bottom:8px">${__("This server needs sudo to control supervisor. The password is used once for")}
-					<code>sudo supervisorctl restart</code> ${__("(web + workers of this bench) — it is not saved or logged.")}</p>
+				{ fieldtype: "HTML", options: `<p class="text-muted" style="margin-bottom:8px">${__("Production bench: runs <b>bench restart</b> (web + workers of this bench, via")}
+					<code>sudo supervisorctl restart</code>). ${__("The password is used once — not saved, not logged.")}</p>
 					${insecure ? `<div class="ae-note warn" style="background:rgba(217,119,6,.11);color:#b45309;margin-bottom:8px">${ic("alert", 15)}<span>${__("This page is not on HTTPS — the password would travel unencrypted. Prefer running bench restart on the server.")}</span></div>` : ""}` },
-				{ fieldname: "sudo_password", fieldtype: "Password", reqd: 1, label: __("Server password (sudo) for {0}", [h.os_user || __("the bench user")]) },
+				{ fieldname: "sudo_password", fieldtype: "Password", reqd: 1, label: __("System user password for {0}", [h.os_user || __("the bench user")]) },
 			],
 			primary_action_label: __("Restart"),
 			primary_action: async (v) => {
@@ -574,8 +582,8 @@ class adiSiteCarePage {
 			${st.type === "Restore" && st.status === "Success" ? `<div class="ae-note ok">${ic("check", 15)}<span>${__("Restore complete — the site is live.")} ${st.restarted ? "" : __("If anything looks stale, run After-restore tasks or restart.")}</span></div>
 				${st.restarted ? "" : `<div class="ae-links">
 					<button class="btn btn-default btn-xs ae-after" data-action="post_restore">${ic("restore", 13)} ${__("After-restore tasks")}</button>
-					<button class="btn btn-default btn-xs ae-after" data-action="restart" ${this.data && (this.data.health.restart_available || this.data.health.supervisor) ? "" : "disabled"}>${ic("power", 13)} ${__("Restart bench")}</button>
-					${this.data && !(this.data.health.restart_available || this.data.health.supervisor) ? `<small class="ae-muted" style="margin:0">${this.restartHint()}</small>` : ""}
+					<button class="btn btn-default btn-xs ae-after" data-action="restart" ${this.data && (this.data.health.restart_available || this.data.health.supervisor || this.data.health.bench_start) ? "" : "disabled"}>${ic("power", 13)} ${__("Restart bench")}</button>
+					${this.data && !(this.data.health.restart_available || this.data.health.supervisor || this.data.health.bench_start) ? `<small class="ae-muted" style="margin:0">${this.restartHint()}</small>` : ""}
 				</div>`}` : ""}
 			${links ? `<div class="ae-links">${links}</div>` : ""}
 			<div class="ae-job-grid ${steps.length ? "" : "nosteps"}">
