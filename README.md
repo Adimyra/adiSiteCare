@@ -63,7 +63,37 @@ a site back to an earlier backup on the same server.
 ### 📊 Dashboard & workspace
 - Health bar: maintenance, scheduler, emails, background workers, disk space — *All good* or *Needs attention*
 - Last backup, backups on server, last restore, jobs in the last 30 days
-- **adiSiteCare** workspace with shortcuts and number cards; every run is kept as a **SiteCare Job** with its full log
+- **adiSiteCare** workspace with shortcuts and number cards
+
+### 🧾 Job history
+- Every backup, restore and action is kept as a **SiteCare Job** — **when** (date & time), **who**, **how**
+  (files created or restored from, safety backup) and the **full terminal log**
+- The history **survives restores**: records newer than the restored backup are put back automatically
+- Backup *files* are cleaned up by Frappe (see below) — the history record always stays
+
+## What runs behind each switch
+
+Nothing custom — adiSiteCare uses the same Frappe functions as these `bench` commands:
+
+| Switch | What changes | Same as |
+|---|---|---|
+| Emails · **Mute** / **Unmute** | `mute_emails` = 1 / 0 in `site_config.json` | `bench --site <site> set-config mute_emails 1` / `0` |
+| Emails · discard waiting | `Email Queue` rows *Not Sent* → *Error* (never sent) | — |
+| Scheduler · **Pause** / **Resume** | `pause_scheduler` = 1 / 0 in `site_config.json` | `bench --site <site> scheduler pause` / `resume` |
+| Scheduler · Resume (when disabled) | System Settings → *Enable Scheduler* = 1 | `bench --site <site> scheduler enable` |
+| Maintenance · on for N min | `maintenance_mode` = 1, then 0 after N minutes | `bench --site <site> set-maintenance-mode on` / `off` |
+
+While emails are muted, Frappe still creates them — they wait in the **Email Queue** and are sent once you unmute.
+Settings in `common_site_config.json` apply to the whole bench; adiSiteCare shows them but leaves them to you.
+
+## Backup files are short-term
+
+adiSiteCare keeps backups where `bench backup` puts them (`sites/<site>/private/backups`), and Frappe cleans that folder:
+
+- **Every backup** first deletes files older than ~23 hours (`keep_backups_for_hours` in site config)
+- **Every hour** the scheduler keeps only the newest **3** backup sets (*System Settings → Number of Backups*)
+
+Download the backups you want to keep, or pair adiSiteCare with an off-site backup app. The **job history** is never deleted.
 
 ## No server passwords needed
 
