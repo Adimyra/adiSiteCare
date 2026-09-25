@@ -321,7 +321,7 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 	doc.insert(ignore_permissions=True)
 	runner.cleanup_status_files()
 	steps = runner.RESTORE_STEPS + ([("restart", "Restart bench")] if cint(restart) else [])
-	runner.new_state(doc.name, "Restore", token=doc.status_token, sources=sources, restart=cint(restart), staging=cint(staging),
+	runner.new_state(doc.name, "Restore", token=doc.status_token, sources=sources, restart=cint(restart), staging=cint(staging), created=str(doc.creation),
 		user=frappe.session.user, with_files=doc.with_files, title=_("Restore {0}").format(os.path.basename(sources["db"])),
 		steps=runner.make_steps(steps))
 	frappe.db.commit()

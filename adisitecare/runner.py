@@ -251,6 +251,31 @@ def _snapshot_history():
 		frappe.db.rollback()
 
 
+def _next_name(name):
+	"""Next free job name with the same prefix (SC-2026-00007 …), counter moved past it."""
+	prefix = name.rpartition("-")[0] + "-"
+	names = frappe.db.sql("select name from `tabSiteCare Job` where name like %s", prefix + "%", pluck=True)
+	top = max([int(n.rpartition("-")[2]) for n in names if n.rpartition("-")[2].isdigit()] + [0])
+	new = f"{prefix}{top + 1:05d}"
+	fix_series(new)
+	return new
+
+
+def _same_job(name, created):
+	row = frappe.db.get_value("SiteCare Job", name, "creation")
+	return row is None or str(row)[:19] == str(created or "")[:19]
+
+
+def _claim_name(state):
+	"""The restored backup may already hold a different job with this job's name (another site's
+	history, or an older one) — then save this job under the next free name instead of overwriting it."""
+	name = state["job"]
+	if _same_job(name, state.get("created")):
+		return
+	state["job"] = _next_name(name)
+	log(state, f"↻ The restored backup already has a job {name} — this restore is recorded as {state['job']}.")
+
+
 def _restore_history(rows):
 	"""Put back history records the restored backup didn't have (e.g. jobs run after that backup was taken)."""
 	added = 0
@@ -260,7 +285,9 @@ def _restore_history(rows):
 		columns = set(frappe.db.get_table_columns("SiteCare Job"))
 		for row in rows:
 			if frappe.db.exists("SiteCare Job", row["name"]):
-				continue
+				if _same_job(row["name"], row.get("creation")):
+					continue
+				row["name"] = _next_name(row["name"])  # a different job has this name in the restored backup
 			doc = frappe.get_doc({"doctype": "SiteCare Job", **{k: v for k, v in row.items() if k in columns}})
 			doc.name = row["name"]
 			doc.flags.name_set = True
@@ -548,8 +575,9 @@ def run_restore(job):
 		state.update(status="Success", stage="Restore complete", progress=100, finished=str(now_datetime()))
 		write_state(state)
 		_reconnect()
-		kept = _restore_history(history)
-		_reconcile(job)
+		_claim_name(state)
+		kept = _restore_history([r for r in history if r["name"] != job])
+		_reconcile(state["job"])
 		if kept:
 			log(state, f"✓ Job history kept — {kept} record(s) newer than the backup put back.")
 		save_record(state, {"safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
@@ -578,8 +606,10 @@ def run_restore(job):
 		write_state(state)
 		try:
 			_reconnect()
-			_restore_history(locals().get("history"))
-			_reconcile(job)
+			if restored:
+				_claim_name(state)
+			_restore_history([r for r in (locals().get("history") or []) if r["name"] != job])
+			_reconcile(state["job"])
 		except Exception:
 			pass
 		save_record(state)
