@@ -13,6 +13,7 @@ No SSH. No MariaDB root password. No sudo. Just a safe, guided page with a live 
 [![ERPNext](https://img.shields.io/badge/ERPNext-v15%20%7C%20v16-4D6443.svg)](https://erpnext.com)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-112921.svg)](https://www.python.org)
 [![Made by Adimyra](https://img.shields.io/badge/made%20by-Adimyra-4D6443.svg)](https://adimyra.com)
+[![Release](https://img.shields.io/github/v/release/Adimyra/adiSiteCare?color=4D6443&label=stable)](https://github.com/Adimyra/adiSiteCare/releases)
 
 </div>
 
@@ -122,15 +123,49 @@ bench --site <site> sitecare-restore-db path/to/backup.sql.gz [--public-files fi
 - Damaged uploads (for example a `.sql.gz` that a browser unpacked while downloading) are rejected immediately with a clear message.
 - Files stay in `sites/<site>/private/backups` — the same folder `bench backup` uses. No extra folders.
 
+## ✅ Compatibility & releases
+
+> **adiSiteCare v1.0.0 is stable on both Frappe / ERPNext v15 and v16.**
+
+| Frappe / ERPNext | Branch | Python | Status |
+|---|---|---|---|
+| **v16** | **`version-16`** | 3.14 | ✅ **Stable** |
+| **v15** | **`version-15`** | 3.10 – 3.12 | ✅ **Stable** |
+| latest | **`main`** | 3.10+ | ✅ **Stable** — same code as both version branches |
+
+**One codebase, both versions:** features that exist only in v16 (workspace sidebar, desktop icons) are picked up
+automatically on v16 and simply skipped on v15. Every release is published on **all three branches** —
+see [Releases](https://github.com/Adimyra/adiSiteCare/releases).
+
 ## Installation
 
+**Frappe / ERPNext v16**
+
 ```bash
-cd frappe-bench
-bench get-app https://github.com/Adimyra/adiSiteCare
+bench get-app https://github.com/Adimyra/adiSiteCare --branch version-16
 bench --site <your-site> install-app adisitecare
 ```
 
-Open **adiSiteCare** from the apps screen, or go to `/app/sitecare`.
+**Frappe / ERPNext v15**
+
+```bash
+bench get-app https://github.com/Adimyra/adiSiteCare --branch version-15
+bench --site <your-site> install-app adisitecare
+```
+
+Then open **adiSiteCare** from the apps screen, or go to **`/app/sitecare`**.
+
+### Updating
+
+```bash
+bench update --apps adisitecare
+```
+
+or, for this app only:
+
+```bash
+cd apps/adisitecare && git pull && cd ../.. && bench --site <your-site> migrate
+```
 
 ### Requirements
 - Frappe / ERPNext **v15 or v16**, MariaDB
