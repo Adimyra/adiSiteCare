@@ -165,6 +165,19 @@ def _upload_name(filename, kind, stamp):
 	return f"{stamp}-{frappe.local.site.replace('.', '_')}-uploaded-{KIND_SUFFIX[kind]}{ext}"
 
 
+def _check_start(data, filename, kind, total):
+	"""Catch a wrong or damaged file on its first piece, before uploading the rest."""
+	name = filename.lower()
+	if name.endswith((".gz", ".tgz")) and data[:2] != b"\x1f\x8b":
+		if data.lstrip().startswith(b"-- begin frappe metadata") or data.lstrip().startswith(b"--"):
+			frappe.throw(_("This file is not really gzip — it was damaged when it was downloaded (the browser unpacked it and "
+				"kept only the first lines). Download the backup again with the adiERP Backup download button, then upload that file."),
+				title=_("Damaged backup file"))
+		frappe.throw(_("{0} is not a valid gzip file.").format(filename), title=_("Damaged backup file"))
+	if kind == "db" and total == 1 and len(data) < 1024:
+		frappe.throw(_("{0} is only {1} bytes — far too small to be a database backup.").format(filename, len(data)), title=_("Damaged backup file"))
+
+
 @frappe.whitelist(methods=["POST"])
 def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, total: int | str, stamp: str) -> dict:
 	"""Receive one piece of a backup file. Pieces arrive in order and are appended to a
@@ -179,6 +192,8 @@ def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, tot
 	data = chunk.stream.read(CHUNK_LIMIT + 1)
 	if len(data) > CHUNK_LIMIT:
 		frappe.throw(_("Chunk too large"))
+	if cint(index) == 0:
+		_check_start(data, filename, kind, cint(total))
 	d = _backups_dir()
 	os.makedirs(d, exist_ok=True)
 	part = os.path.join(d, f".upload-{upload_id}.part")
