@@ -46,7 +46,7 @@ def overview() -> dict:
 	if os.path.isdir(d):
 		for fn in os.listdir(d):
 			m = re.match(r"^(\d{8}_\d{6})-", fn)
-			if not m:
+			if not m or "adierp-tmp" in fn:
 				continue
 			kind = ("db" if fn.endswith((".sql.gz", ".sql")) else "private" if fn.endswith(("private-files.tar", "private-files.tgz", "private-files.tar.gz"))
 				else "public" if fn.endswith(("files.tar", "files.tgz", "files.tar.gz")) else "config" if fn.endswith(".json") else None)
@@ -54,7 +54,7 @@ def overview() -> dict:
 				continue
 			g = groups.setdefault(m.group(1), {"stamp": m.group(1), "files": {}})
 			size = os.path.getsize(os.path.join(d, fn))
-			g["files"][kind] = {"name": fn, "size": _human(size), "bytes": size, "url": f"/backups/{fn}"}
+			g["files"][kind] = {"name": fn, "size": _human(size), "bytes": size, "url": download_url(fn)}
 	backups = sorted(groups.values(), key=lambda g: g["stamp"], reverse=True)
 	for g in backups:
 		s = g["stamp"]
@@ -64,7 +64,6 @@ def overview() -> dict:
 		"db_file", "public_file", "private_file", "error", "status_token"], order_by="creation desc", limit=15)
 	for j in jobs:
 		j["by"] = frappe.utils.get_fullname(j.requested_by) if j.requested_by else ""
-	conf = frappe.get_conf()
 	return {
 		"site": frappe.local.site,
 		"frappe": frappe.__version__,
@@ -73,7 +72,6 @@ def overview() -> dict:
 		"jobs": jobs,
 		"busy": _busy_job(),
 		"disk": {"free": _human(free), "free_bytes": free, "total": _human(total), "pct_used": round(used * 100 / total)},
-		"root_password_set": bool(conf.get("root_password")),
 		"db_size": _human(frappe.db.sql("select sum(data_length + index_length) from information_schema.tables where table_schema=%s", frappe.conf.db_name)[0][0] or 0),
 	}
 
@@ -81,7 +79,48 @@ def overview() -> dict:
 @frappe.whitelist()
 def job_status(job: str) -> dict:
 	_require()
-	return runner.read_state(job) or {}
+	state = runner.read_state(job)
+	if state:
+		return state
+	d = frappe.db.get_value("ERP Backup Job", job, ["name", "job_type", "status", "stage", "progress", "error", "log",
+		"db_file", "public_file", "private_file", "config_file"], as_dict=True) or {}
+	return {"job": d.get("name"), "type": d.get("job_type"), "status": d.get("status"), "stage": d.get("stage"), "progress": d.get("progress"),
+		"error": d.get("error"), "log": d.get("log"), "outputs": {k: d.get(k + "_file") for k in ("db", "public", "private", "config")}} if d else {}
+
+
+@frappe.whitelist(methods=["GET"])
+def download(file: str):
+	"""Byte-exact download of a backup file (as an attachment, never re-encoded by the browser).
+	Behind nginx the file is handed to nginx (X-Accel-Redirect), so big files don't tie up a worker."""
+	_require()
+	from urllib.parse import quote
+
+	from werkzeug.utils import send_file
+	from werkzeug.wrappers import Response
+
+	path = None
+	for kind in ("db", "public", "config"):
+		try:
+			path = _resolve(file, kind)
+			break
+		except frappe.ValidationError:
+			continue
+	if not path:
+		frappe.throw(_("File not found: {0}").format(file))
+	name = os.path.basename(path)
+	if frappe.request.headers.get("X-Use-X-Accel-Redirect"):
+		response = Response()
+		response.headers["X-Accel-Redirect"] = quote(f"/protected/private/backups/{name}")
+		response.headers["Content-Type"] = "application/octet-stream"
+	else:
+		response = send_file(path, environ=frappe.request.environ, mimetype="application/octet-stream", as_attachment=True, download_name=name)
+	response.headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{quote(name)}"
+	response.headers["Cache-Control"] = "no-store"
+	return response
+
+
+def download_url(name):
+	return f"/api/method/adi_erp_backup.api.download?file={name}"
 
 
 # ---------------------------------------------------------------- backup
@@ -101,23 +140,37 @@ def start_backup(with_files: int | str = 0) -> dict:
 	return {"job": doc.name}
 
 
-# ---------------------------------------------------------------- uploads (chunked, straight to disk)
+# ---------------------------------------------------------------- uploads (chunked, straight into private/backups)
+
+KIND_SUFFIX = {"db": "database", "public": "files", "private": "private-files", "config": "site_config_backup"}
+STAMPED = re.compile(r"^\d{8}_\d{6}-")
 
 
 def _check_ext(filename, kind):
 	name = (filename or "").lower()
-	allowed = runner.DB_EXTS if kind == "db" else runner.FILE_EXTS
+	allowed = runner.DB_EXTS if kind == "db" else (".json",) if kind == "config" else runner.FILE_EXTS
 	if not name.endswith(allowed):
-		frappe.throw(_("{0} must be one of: {1}").format(_("Database backup") if kind == "db" else _("Files backup"), ", ".join(allowed)))
-	if "/" in filename or "\\" in filename or filename.startswith("."):
+		label = {"db": _("Database backup"), "config": _("Site config backup")}.get(kind, _("Files backup"))
+		frappe.throw(_("{0} must be one of: {1}").format(label, ", ".join(allowed)))
+	if "/" in filename or "\\" in filename or filename.startswith(".") or ".." in filename:
 		frappe.throw(_("Invalid file name"))
 
 
+def _upload_name(filename, kind, stamp):
+	"""Keep a Frappe backup's own name (so its database/files/config stay together in the list);
+	anything else gets the usual <timestamp>-<site>-<kind> name."""
+	if STAMPED.match(filename) and (kind != "public" or not filename.endswith(("private-files.tar", "private-files.tgz"))):
+		return filename
+	ext = next(e for e in (".sql.gz", ".sql", ".tgz", ".tar", ".json") if filename.lower().endswith(e))
+	return f"{stamp}-{frappe.local.site.replace('.', '_')}-uploaded-{KIND_SUFFIX[kind]}{ext}"
+
+
 @frappe.whitelist(methods=["POST"])
-def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, total: int | str) -> dict:
-	"""Receive one piece of a backup file. Pieces arrive in order and are appended."""
+def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, total: int | str, stamp: str) -> dict:
+	"""Receive one piece of a backup file. Pieces arrive in order and are appended to a
+	hidden .part file in private/backups, renamed to the final name after the last piece."""
 	_require()
-	if kind not in ("db", "public", "private") or not re.fullmatch(r"[a-z0-9]{8,40}", upload_id or ""):
+	if kind not in KIND_SUFFIX or not re.fullmatch(r"[a-z0-9]{8,40}", upload_id or "") or not re.fullmatch(r"\d{8}_\d{6}", stamp or ""):
 		frappe.throw(_("Invalid upload"))
 	_check_ext(filename, kind)
 	chunk = frappe.request.files.get("chunk") if frappe.request and frappe.request.files else None
@@ -126,32 +179,37 @@ def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, tot
 	data = chunk.stream.read(CHUNK_LIMIT + 1)
 	if len(data) > CHUNK_LIMIT:
 		frappe.throw(_("Chunk too large"))
-	path = os.path.join(runner.work_dir("uploads", upload_id), filename)
+	d = _backups_dir()
+	os.makedirs(d, exist_ok=True)
+	part = os.path.join(d, f".upload-{upload_id}.part")
 	index = cint(index)
-	with open(path, "wb" if index == 0 else "ab") as f:
+	with open(part, "wb" if index == 0 else "ab") as f:
 		f.write(data)
-	done = index + 1 >= cint(total)
-	return {"ref": f"upload:{upload_id}/{filename}" if done else None, "size": os.path.getsize(path), "done": done}
+	if index + 1 < cint(total):
+		return {"ref": None, "done": False}
+	final = _upload_name(filename, kind, stamp)
+	dest = os.path.join(d, final)
+	if os.path.exists(dest):
+		if os.path.getsize(dest) == os.path.getsize(part):
+			os.remove(part)  # same file uploaded again — use the one that's there
+		else:
+			os.remove(part)
+			frappe.throw(_("A different file named {0} is already in the backups folder.").format(final))
+	else:
+		os.replace(part, dest)
+	return {"ref": final, "done": True, "size": _human(os.path.getsize(dest))}
 
 
 def _resolve(ref, kind):
-	"""upload:<id>/<file> (uploaded here) or backup:<file> (already in private/backups) → absolute path."""
+	"""A file name in private/backups → absolute path (never outside that folder)."""
 	if not ref:
 		return None
-	if ref.startswith("upload:"):
-		upload_id, _sep, filename = ref[7:].partition("/")
-		_check_ext(filename, kind)
-		path = os.path.join(runner.work_dir("uploads", upload_id), filename)
-	elif ref.startswith("backup:"):
-		filename = ref[7:]
-		_check_ext(filename, kind)
-		path = os.path.join(_backups_dir(), filename)
-	else:
-		frappe.throw(_("Invalid source"))
-	real = os.path.realpath(path)
-	if not real.startswith(os.path.realpath(frappe.get_site_path("private"))) or not os.path.isfile(real):
-		frappe.throw(_("File not found: {0}").format(os.path.basename(path)))
-	return real
+	filename = ref.split(":", 1)[-1]
+	_check_ext(filename, kind)
+	path = os.path.realpath(os.path.join(_backups_dir(), filename))
+	if os.path.dirname(path) != os.path.realpath(_backups_dir()) or not os.path.isfile(path):
+		frappe.throw(_("File not found: {0}").format(filename))
+	return path
 
 
 # ---------------------------------------------------------------- restore
@@ -159,7 +217,7 @@ def _resolve(ref, kind):
 
 @frappe.whitelist(methods=["POST"])
 def start_restore(db: str, confirm_site: str, password: str, public: str | None = None, private: str | None = None,
-		restart: int | str = 0, db_root_password: str | None = None) -> dict:
+		config: str | None = None, restart: int | str = 0, staging: int | str = 0) -> dict:
 	_require()
 	from frappe.utils.password import check_password
 
@@ -171,13 +229,12 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 		frappe.throw(_("Your password is incorrect."))
 	if _busy_job():
 		frappe.throw(_("Another backup or restore is already running — wait for it to finish."))
-	if not db_root_password and not frappe.get_conf().get("root_password"):
-		frappe.throw(_("Enter the MariaDB root password — restore needs it to recreate the database (it is not saved)."))
 
-	sources = {"db": _resolve(db, "db"), "public": _resolve(public, "public"), "private": _resolve(private, "private")}
+	sources = {"db": _resolve(db, "db"), "public": _resolve(public, "public"), "private": _resolve(private, "private"),
+		"config": _resolve(config, "config")}
 	if not sources["db"]:
 		frappe.throw(_("Choose the database backup to restore."))
-	need = sum(os.path.getsize(p) for p in sources.values() if p) * 3 + 200 * 1024 * 1024
+	need = sum(os.path.getsize(sources[k]) for k in ("db", "public", "private") if sources[k]) * 3 + 200 * 1024 * 1024
 	free = shutil.disk_usage(get_bench_path()).free
 	if free < need:
 		frappe.throw(_("Not enough disk space: {0} free, about {1} needed (restore + safety backup). Free some space first.").format(_human(free), _human(need)))
@@ -188,19 +245,9 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 		"restore_db": os.path.basename(sources["db"]), "restore_public": os.path.basename(sources["public"] or "") or None,
 		"restore_private": os.path.basename(sources["private"] or "") or None})
 	doc.insert(ignore_permissions=True)
-
-	# copy the sources next to the job — they must survive the restore (which replaces private/files)
-	job_dir = runner.work_dir("restore", doc.name)
-	copied = {}
-	for key, path in sources.items():
-		if path:
-			dest = os.path.join(job_dir, os.path.basename(path))
-			shutil.copy2(path, dest)
-			copied[key] = dest
-	runner.new_state(doc.name, "Restore", token=doc.status_token, sources=copied, restart=cint(restart), user=frappe.session.user,
-		with_files=doc.with_files)
-	if db_root_password:
-		frappe.cache().set_value(f"{runner.APP}:rootpwd:{doc.name}", db_root_password, expires_in_sec=3 * 3600)
+	runner.cleanup_status_files()
+	runner.new_state(doc.name, "Restore", token=doc.status_token, sources=sources, restart=cint(restart), staging=cint(staging),
+		user=frappe.session.user, with_files=doc.with_files)
 	frappe.db.commit()
 	frappe.enqueue("adi_erp_backup.runner.run_restore", queue="long", timeout=6 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name, "token": doc.status_token}

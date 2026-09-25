@@ -65,7 +65,6 @@ class AdiErpBackup {
 				<span>Frappe <b>${esc(d.frappe)}</b></span>
 				<span>${__("Database")}: <b>${esc(d.db_size)}</b></span>
 				<span>${__("Disk free")}: <b style="${lowDisk ? "color:var(--red-600,#dc2626)" : ""}">${esc(d.disk.free)}</b> ${__("of")} ${esc(d.disk.total)}</span>
-				<span>${__("DB root password")}: <b>${d.root_password_set ? __("configured") : __("not configured")}</b></span>
 			</div>
 			${lowDisk ? `<div class="warn">⚠ ${__("Low disk space — backups and restores need room for the database and files. Free space before running one.")}</div>` : ""}
 			<div class="tabs">
@@ -121,90 +120,101 @@ class AdiErpBackup {
 	// ------------------------------------------------------------ restore
 	renderRestore(body) {
 		const d = this.data, p = this.preset;
-		const pick = (kind) => `<select class="form-control rs-pick" data-kind="${kind}"><option value="">${__("— upload a file instead —")}</option>
-			${d.backups.filter((b) => b.files[kind]).map((b) => `<option value="backup:${esc(b.files[kind].name)}" ${p && p.files[kind] && p.stamp === b.stamp ? "selected" : ""}>${esc(b.when)} · ${esc(b.files[kind].size)}</option>`).join("")}</select>`;
+		const LABEL = { db: __("Database backup"), public: __("Public files"), private: __("Private files"), config: __("Site config") };
+		const pick = (kind) => `<select class="form-control rs-pick" data-kind="${kind}"><option value="">${__("— upload a file —")}</option>
+			${d.backups.filter((b) => b.files[kind]).map((b) => `<option value="${esc(b.files[kind].name)}" ${p && p.files[kind] && p.stamp === b.stamp ? "selected" : ""}>${__("On server")}: ${esc(b.when)} · ${esc(b.files[kind].size)}</option>`).join("")}</select>`;
 		const up = (kind, accept) => `<input type="file" class="form-control rs-file" data-kind="${kind}" accept="${accept}"><div class="up up-${kind}"></div>`;
+		const hasFiles = p && (p.files.public || p.files.private);
 		body.html(`
 			<div class="card-box">
 				<h4>${__("Restore")}</h4>
-				<div class="danger-box">⚠ ${__("Restore REPLACES this site's database")}${__(" (and files, if chosen)")} ${__("with the backup. Everyone is signed out. Test on a test site first when you can.")}</div>
+				<div class="danger-box">⚠ ${__("Restore REPLACES this site's database (and files, if chosen) with the backup. Everyone is signed out.")}</div>
+				<div class="muted" style="margin-top:12px">${__("Typical use: download a backup on production, upload it here on staging. Or pick an older backup already on this server. Uploaded files are saved in")} <code>sites/${esc(d.site)}/private/backups</code>.</div>
 				<div class="muted" style="margin-top:12px">${__("What happens, in order:")}</div>
 				<ol class="steps">
 					<li>${__("Check the backup files (valid, not partial, Frappe version)")}</li>
 					<li>${__("Safety backup of the site as it is now — your undo point")}</li>
 					<li>${__("Maintenance mode ON (verified) and scheduler paused")}</li>
-					<li><code>bench --site ${esc(d.site)} restore &lt;db&gt; [--with-public-files] [--with-private-files] --force</code></li>
-					<li><code>migrate</code>, <code>clear-cache</code>, ${__("scheduler resumed")}, ${__("maintenance mode OFF")}</li>
+					<li>${__("Database replaced using this site's own database user — no MariaDB root password needed")}${__(", files extracted")}</li>
+					<li><code>migrate</code>, <code>clear-cache</code>, ${__("maintenance mode OFF")}</li>
 					<li>${__("Optional: bench restart")}</li>
 				</ol>
 			</div>
 			<div class="card-box" style="display:flex;flex-direction:column;gap:14px">
 				<div class="grid2">
-					<label class="f">${__("Database backup")} (.sql.gz / .sql) *
-						${pick("db")}${up("db", ".gz,.sql")}
-					</label>
+					<label class="f">${LABEL.db} (.sql.gz / .sql) *${pick("db")}${up("db", ".gz,.sql")}</label>
+					<label class="f">${LABEL.config} (.json) · ${__("optional")}${pick("config")}${up("config", ".json")}
+						<span class="up">${__("From another site (e.g. production)? Add its site config backup so saved passwords (email, integrations) keep working — only its encryption key is used.")}</span></label>
 				</div>
-				<label style="display:flex;align-items:center;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-files" ${p && (p.files.public || p.files.private) ? "checked" : ""}> ${__("With files")} <span class="muted">(${__("public and/or private files backup")})</span></label>
-				<div class="grid2 rs-files-box" style="${p && (p.files.public || p.files.private) ? "" : "display:none"}">
-					<label class="f">${__("Public files")} (.tar)${pick("public")}${up("public", ".tar,.tgz,.gz")}</label>
-					<label class="f">${__("Private files")} (.tar)${pick("private")}${up("private", ".tar,.tgz,.gz")}</label>
+				<label style="display:flex;align-items:center;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-files" ${hasFiles ? "checked" : ""}> ${__("With files")} <span class="muted">(${__("public and/or private files backup")})</span></label>
+				<div class="grid2 rs-files-box" style="${hasFiles ? "" : "display:none"}">
+					<label class="f">${LABEL.public} (.tar / .tgz)${pick("public")}${up("public", ".tar,.tgz")}</label>
+					<label class="f">${LABEL.private} (.tar / .tgz)${pick("private")}${up("private", ".tar,.tgz")}</label>
 				</div>
+				<label style="display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-staging" style="margin-top:3px"> <span>${__("This is a staging / test copy")} <span class="muted">— ${__("keep emails muted and the scheduler paused, so production data here never emails real customers")}</span></span></label>
 				<div class="grid2">
-					${d.root_password_set ? "" : `<label class="f">${__("MariaDB root password")} *<input type="password" class="form-control rs-root" autocomplete="off"><span class="up">${__("Used once, never saved.")}</span></label>`}
 					<label class="f">${__("Type the site name to confirm")} *<input type="text" class="form-control rs-site" placeholder="${esc(d.site)}" autocomplete="off"></label>
 					<label class="f">${__("Your password")} *<input type="password" class="form-control rs-pwd" autocomplete="current-password"></label>
 				</div>
-				<label style="display:flex;align-items:center;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-restart"> ${__("Restart bench after restore")} <span class="muted">(bench restart — production with supervisor)</span></label>
+				<label style="display:flex;align-items:flex-start;gap:8px;margin:0;font-size:13px"><input type="checkbox" class="rs-restart" style="margin-top:3px"> <span>${__("Restart bench after restore")} <span class="muted">— ${__("usually not needed. Works only on servers set up with bench setup production / sudoers; otherwise it is skipped (no password is ever asked).")}</span></span></label>
 				<div><button class="btn btn-danger btn-sm rs-go" ${d.busy ? "disabled" : ""}>${__("Start restore")}</button></div>
 			</div>`);
 		body.find(".rs-files").on("change", (e) => body.find(".rs-files-box").toggle(e.target.checked));
+		body.find(".rs-file").on("change", (e) => { if (e.target.files[0]) body.find(`.rs-pick[data-kind=${$(e.target).data("kind")}]`).val(""); });
+		body.find(".rs-pick").on("change", (e) => { if (e.target.value) body.find(`.rs-file[data-kind=${$(e.target).data("kind")}]`).val(""); });
 		body.find(".rs-go").on("click", () => this.startRestore(body));
 	}
 
-	async uploadFile(file, kind, $status) {
+	async uploadFile(file, kind, stamp, $status) {
 		const id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
 		const total = Math.max(1, Math.ceil(file.size / CHUNK));
 		let ref = null;
 		for (let i = 0; i < total; i++) {
 			const fd = new FormData();
-			fd.append("upload_id", id); fd.append("kind", kind); fd.append("filename", file.name);
+			fd.append("upload_id", id); fd.append("kind", kind); fd.append("filename", file.name); fd.append("stamp", stamp);
 			fd.append("index", i); fd.append("total", total);
 			fd.append("chunk", file.slice(i * CHUNK, (i + 1) * CHUNK), file.name);
 			const res = await fetch("/api/method/" + API + "upload_chunk", { method: "POST", body: fd, headers: { "X-Frappe-CSRF-Token": frappe.csrf_token } });
 			const j = await res.json().catch(() => ({}));
-			if (!res.ok) throw new Error((j._server_messages && JSON.parse(JSON.parse(j._server_messages)[0]).message) || j.exception || __("Upload failed"));
+			if (!res.ok) {
+				let msg = __("Upload failed");
+				try { msg = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { /* keep default */ }
+				throw new Error(msg);
+			}
 			$status.text(`${__("Uploading")} ${file.name}: ${Math.round(((i + 1) / total) * 100)}%`);
 			ref = j.message.ref;
 		}
-		$status.text(`✓ ${file.name} ${__("uploaded")}`);
+		$status.text(`✓ ${file.name} ${__("saved to backups")}`);
 		return ref;
 	}
 
 	async startRestore(body) {
 		const withFiles = body.find(".rs-files").is(":checked");
+		const now = new Date(), z = (n) => String(n).padStart(2, "0");
+		const stamp = `${now.getFullYear()}${z(now.getMonth() + 1)}${z(now.getDate())}_${z(now.getHours())}${z(now.getMinutes())}${z(now.getSeconds())}`;
 		const refOf = async (kind) => {
-			const picked = body.find(`.rs-pick[data-kind=${kind}]`).val();
 			const file = body.find(`.rs-file[data-kind=${kind}]`)[0].files[0];
-			if (file) return this.uploadFile(file, kind, body.find(`.up-${kind}`));
-			return picked || null;
+			if (file) return this.uploadFile(file, kind, stamp, body.find(`.up-${kind}`));
+			return body.find(`.rs-pick[data-kind=${kind}]`).val() || null;
 		};
 		const site = body.find(".rs-site").val().trim(), pwd = body.find(".rs-pwd").val();
+		if (!body.find(".rs-file[data-kind=db]")[0].files[0] && !body.find(".rs-pick[data-kind=db]").val())
+			return frappe.msgprint(__("Choose or upload the database backup."));
 		if (site !== this.data.site) return frappe.msgprint(__("Type the site name exactly: {0}", [this.data.site]));
 		if (!pwd) return frappe.msgprint(__("Enter your password."));
 		const $btn = body.find(".rs-go").prop("disabled", true);
 		try {
 			const db = await refOf("db");
-			if (!db) throw new Error(__("Choose or upload the database backup."));
+			const config = await refOf("config");
 			const pub = withFiles ? await refOf("public") : null;
 			const priv = withFiles ? await refOf("private") : null;
 			if (withFiles && !pub && !priv) throw new Error(__("Choose or upload the public and/or private files backup, or untick With files."));
-			frappe.confirm(__("Restore will replace this site's data and sign everyone out. A safety backup is taken first. Continue?"), async () => {
+			frappe.confirm(__("Restore {0} into {1}? This replaces the site's data and signs everyone out. A safety backup is taken first.", [`<b>${esc(db)}</b>`, `<b>${esc(this.data.site)}</b>`]), async () => {
 				const r = await frappe.call({ method: API + "start_restore", freeze: true, args: {
-					db, public: pub, private: priv, confirm_site: site, password: pwd,
-					restart: body.find(".rs-restart").is(":checked") ? 1 : 0, db_root_password: body.find(".rs-root").val() || undefined } });
-				this.restoreToken = r.message.token;
+					db, config, public: pub, private: priv, confirm_site: site, password: pwd,
+					restart: body.find(".rs-restart").is(":checked") ? 1 : 0, staging: body.find(".rs-staging").is(":checked") ? 1 : 0 } });
 				this.watch(r.message.job, r.message.token);
-			}, () => $btn.prop("disabled", false));
+			}, () => { $btn.prop("disabled", false); this.load(); });
 		} catch (e) {
 			$btn.prop("disabled", false);
 			frappe.msgprint({ title: __("Can't start restore"), message: esc(e.message), indicator: "red" });
@@ -219,7 +229,7 @@ class AdiErpBackup {
 			let st = null;
 			try {
 				if (token) {  // restore: read the public status file — the site itself is in maintenance
-					const r = await fetch(`/files/adierp-status/${token}.json?t=${Date.now()}`, { cache: "no-store" });
+					const r = await fetch(`/files/adierp-status-${token}.json?t=${Date.now()}`, { cache: "no-store" });
 					if (r.ok) st = await r.json();
 				} else {
 					const r = await frappe.call({ method: API + "job_status", args: { job } });
@@ -244,7 +254,7 @@ class AdiErpBackup {
 		const cls = st.status === "Success" ? "ok" : st.status === "Failed" ? "bad" : "run";
 		const out = st.outputs || {};
 		const links = st.type === "Backup" && st.status === "Success"
-			? ["db", "public", "private", "config"].filter((k) => out[k]).map((k) => `<a class="btn btn-default btn-xs" href="/backups/${esc(out[k])}" target="_blank">⬇ ${{ db: __("Database"), public: __("Public files"), private: __("Private files"), config: __("Site config") }[k]}</a>`).join(" ")
+			? ["db", "public", "private", "config"].filter((k) => out[k]).map((k) => `<a class="btn btn-default btn-xs" href="/api/method/adi_erp_backup.api.download?file=${encodeURIComponent(out[k])}" target="_blank">⬇ ${{ db: __("Database"), public: __("Public files"), private: __("Private files"), config: __("Site config") }[k]}</a>`).join(" ")
 			: "";
 		const done = st.type === "Restore" && st.status === "Success";
 		$p.html(`<div class="card-box" style="display:flex;flex-direction:column;gap:10px">
@@ -274,7 +284,7 @@ class AdiErpBackup {
 				<span class="muted">${esc(j.by)} · ${frappe.datetime.str_to_user(j.creation)}</span>
 				<span style="flex:1"></span>
 				${j.status === "Queued" || j.status === "Running" ? `<button class="btn btn-default btn-xs hs-watch" data-job="${esc(j.name)}" data-token="${esc(j.job_type === "Restore" ? j.status_token || "" : "")}">${__("Show progress")}</button>` : ""}
-				${j.db_file ? `<a class="btn btn-default btn-xs" href="/backups/${esc(j.db_file)}" target="_blank">⬇ ${__("Database")}</a>` : ""}
+				${j.db_file ? `<a class="btn btn-default btn-xs" href="/api/method/adi_erp_backup.api.download?file=${encodeURIComponent(j.db_file)}" target="_blank">⬇ ${__("Database")}</a>` : ""}
 			</div>`).join("") : `<div class="muted">${__("Nothing yet.")}</div>`}
 		</div>`);
 		body.find(".hs-watch").on("click", (e) => { const $b = $(e.currentTarget); this.watch($b.data("job"), $b.data("token") || undefined); });

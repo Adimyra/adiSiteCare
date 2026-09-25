@@ -2,11 +2,8 @@
 bench/frappe commands you would type in a terminal, stream their output, and keep
 their progress in a JSON file.
 
-Progress lives in files, not the database, because a restore replaces the database
-(and maintenance mode blocks every request to the site while it runs):
-  sites/<site>/private/adi_erp_backup/jobs/<job>.json   full state + log (System Manager only)
-  sites/<site>/public/files/adierp-status/<token>.json  progress mirror the page can read
-                                                         while the site is in maintenance
+Backup files stay in sites/<site>/private/backups (same place as `bench backup`).
+A restore uses the site's own database user — no MariaDB root password is needed.
 Works on Frappe v15 and v16.
 """
 
@@ -23,42 +20,46 @@ from frappe.utils import get_bench_path, now_datetime
 
 APP = "adi_erp_backup"
 DB_EXTS = (".sql.gz", ".sql")
-FILE_EXTS = (".tar", ".tar.gz", ".tgz")
+FILE_EXTS = (".tar", ".tgz")
 
 
 # ---------------------------------------------------------------- paths & state
+#
+# Backup files live only where `bench backup` puts them: sites/<site>/private/backups.
+# Job progress lives in Redis (it survives the database being replaced), and for a
+# restore also in one small file the page can read while the site is in maintenance:
+#   sites/<site>/public/files/adierp-status-<random token>.json
 
 
-def work_dir(*parts):
-	path = frappe.get_site_path("private", APP, *parts)
-	os.makedirs(path if not os.path.splitext(path)[1] else os.path.dirname(path), exist_ok=True)
-	return path
-
-
-def state_path(job):
-	return os.path.join(work_dir("jobs"), f"{job}.json")
+def backups_dir():
+	return frappe.get_site_path("private", "backups")
 
 
 def public_status_path(token):
-	d = frappe.get_site_path("public", "files", "adierp-status")
-	os.makedirs(d, exist_ok=True)
-	return os.path.join(d, f"{token}.json")
+	return frappe.get_site_path("public", "files", f"adierp-status-{token}.json")
+
+
+def _cache():
+	return frappe.cache() if callable(frappe.cache) else frappe.cache
+
+
+def _key(job):
+	return f"{APP}:job:{job}"
 
 
 def read_state(job):
 	try:
-		with open(state_path(job)) as f:
-			return json.load(f)
+		return _cache().get_value(_key(job))
 	except Exception:
 		return None
 
 
 def write_state(state):
 	state["updated"] = str(now_datetime())
-	tmp = state_path(state["job"]) + ".tmp"
-	with open(tmp, "w") as f:
-		json.dump(state, f, indent=1, default=str)
-	os.replace(tmp, state_path(state["job"]))
+	try:
+		_cache().set_value(_key(state["job"]), state, expires_in_sec=3 * 24 * 3600)
+	except Exception:
+		pass  # Redis busy/flushed for a moment — the next write puts it back
 	if state.get("token"):  # mirror without anything sensitive
 		mirror = {k: state.get(k) for k in ("job", "type", "status", "stage", "progress", "error", "updated", "finished", "outputs", "restarted")}
 		mirror["log"] = "\n".join((state.get("log") or "").splitlines()[-150:])
@@ -66,6 +67,18 @@ def write_state(state):
 		with open(pub + ".tmp", "w") as f:
 			json.dump(mirror, f, default=str)
 		os.replace(pub + ".tmp", pub)
+
+
+def cleanup_status_files(days=7):
+	d = frappe.get_site_path("public", "files")
+	for fn in os.listdir(d) if os.path.isdir(d) else []:
+		if fn.startswith("adierp-status-"):
+			path = os.path.join(d, fn)
+			if time.time() - os.path.getmtime(path) > days * 86400:
+				try:
+					os.remove(path)
+				except OSError:
+					pass
 
 
 def new_state(job, kind, token=None, **extra):
@@ -77,7 +90,7 @@ def new_state(job, kind, token=None, **extra):
 
 # ---------------------------------------------------------------- running commands
 
-SECRET = re.compile(r"(--db-root-password\s+)(\S+)")
+SECRET = re.compile(r"(--db-root-password\s+|encryption_key\W+)(\S+)")
 
 
 def _frappe_cmd(*args):
@@ -192,6 +205,21 @@ def run_backup(job):
 # ---------------------------------------------------------------- restore
 
 
+def _supervisor_ok():
+	"""bench restart works without a password only when this user can talk to supervisor
+	directly (bench setup production) or has passwordless sudo (bench setup sudoers)."""
+	try:
+		r = subprocess.run(["supervisorctl", "status"], capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+		if r.returncode in (0, 3) and "Permission denied" not in (r.stdout + r.stderr) and r.stdout.strip():
+			return True
+	except Exception:
+		pass
+	try:
+		return subprocess.run(["sudo", "-n", "supervisorctl", "status"], capture_output=True, timeout=15, stdin=subprocess.DEVNULL).returncode in (0, 3)
+	except Exception:
+		return False
+
+
 def run_restore(job):
 	state = read_state(job)
 	if not state:
@@ -199,15 +227,17 @@ def run_restore(job):
 	state.update(status="Running", started=str(now_datetime()))
 	save_record(state, {"started_on": state["started"]})
 	src = state["sources"]
+	staging = state.get("staging")
 	maintenance_on = restored = False
-	root_pwd = frappe.cache().get_value(f"{APP}:rootpwd:{job}")
-	frappe.cache().delete_value(f"{APP}:rootpwd:{job}")
+	with_files = bool(src.get("public") or src.get("private"))
 	try:
 		# 1. pre-flight: the files are there and look right
 		state.update(stage="Checking the backup files", progress=3)
 		log(state, "Checking the backup files…")
 		from frappe.installer import is_downgrade, is_partial, validate_database_sql
 
+		if (frappe.conf.db_type or "mariadb") != "mariadb":
+			raise RuntimeError("Only MariaDB sites are supported.")
 		db = src["db"]
 		if not os.path.isfile(db):
 			raise RuntimeError("The database backup file is missing.")
@@ -218,14 +248,21 @@ def run_restore(job):
 		if is_downgrade(db):
 			log(state, "⚠ This backup is from an older Frappe version — migrate will upgrade it.")
 		validate_database_sql(db, _raise=True)
-		for key in ("public", "private"):
+		for key in ("public", "private", "config"):
 			if src.get(key) and not os.path.isfile(src[key]):
-				raise RuntimeError(f"The {key} files backup is missing.")
+				raise RuntimeError(f"The {key} backup file is missing.")
+		key_from_backup = None
+		if src.get("config"):
+			with open(src["config"]) as f:
+				key_from_backup = (json.load(f) or {}).get("encryption_key")
+		# `bench backup` removes files older than a day — keep the ones we are about to use
+		for path in src.values():
+			if path:
+				os.utime(path)
 		log(state, "✓ Backup files look good.")
 
-		# 2. safety backup of the site as it is now — the undo point
-		run(state, _frappe_cmd("backup", *(["--with-files"] if (src.get("public") or src.get("private")) else [])),
-			"Safety backup of the current site", 5, 25, expect_seconds=120)
+		# 2. safety backup of the site as it is now — the undo point (lands in private/backups too)
+		run(state, _frappe_cmd("backup", *(["--with-files"] if with_files else [])), "Safety backup of the current site", 5, 25, expect_seconds=120)
 		safety = parse_backup_output(state["log"])
 		state["outputs"]["safety"] = safety
 		log(state, f"✓ Safety backup: {safety.get('db')}")
@@ -236,18 +273,23 @@ def run_restore(job):
 		if not int(site_config().get("maintenance_mode") or 0):
 			raise RuntimeError("Maintenance mode did not switch on — stopping before touching the database.")
 		log(state, "✓ Maintenance mode is ON — users see the maintenance page.")
-		run(state, _frappe_cmd("set-config", "pause_scheduler", "1"), "Pausing the scheduler", 30, 33, 10)
+		run(state, _frappe_cmd("set-config", "pause_scheduler", "1"), "Pausing the scheduler", 30, 32, 10)
+		if staging:
+			run(state, _frappe_cmd("set-config", "mute_emails", "1"), "Muting outgoing emails (staging copy)", 32, 33, 10)
 
-		# 4. restore
-		args = ["restore", db, "--force"]
+		# 4. restore — with the site's own database user, so no MariaDB root password is needed
+		args = ["adierp-restore-db", db]
 		if src.get("public"):
-			args += ["--with-public-files", src["public"]]
+			args += ["--public-files", src["public"]]
 		if src.get("private"):
-			args += ["--with-private-files", src["private"]]
-		if root_pwd:
-			args += ["--db-root-password", root_pwd]
-		run(state, _frappe_cmd(*args), "Restoring the database" + (" and files" if (src.get("public") or src.get("private")) else ""), 34, 70, expect_seconds=300)
-		restored = True
+			args += ["--private-files", src["private"]]
+		restored = True  # from here on the database may already be changed
+		run(state, _frappe_cmd(*args), "Restoring the database" + (" and files" if with_files else ""), 34, 70, expect_seconds=300)
+		if key_from_backup and key_from_backup != site_config().get("encryption_key"):
+			from frappe.installer import update_site_config
+
+			update_site_config("encryption_key", key_from_backup, site_config_path=frappe.get_site_path("site_config.json"))
+			log(state, "✓ Encryption key taken from the backup's site config (saved passwords in the backup keep working).")
 
 		# 5. keep this tool on the site even if the backup is from before it was installed
 		apps = subprocess.run(_frappe_cmd("list-apps"), cwd=os.path.join(get_bench_path(), "sites"), capture_output=True, text=True).stdout
@@ -260,7 +302,11 @@ def run_restore(job):
 		run(state, _frappe_cmd("clear-website-cache"), "Clearing website cache", 94, 95, 20)
 
 		# 7. back online
-		run(state, _frappe_cmd("set-config", "pause_scheduler", "0"), "Resuming the scheduler", 95, 96, 10)
+		if staging:
+			log(state, "Staging copy: the scheduler stays PAUSED and emails stay MUTED "
+				"(turn them on with: bench --site {0} set-config pause_scheduler 0 / mute_emails 0).".format(frappe.local.site))
+		else:
+			run(state, _frappe_cmd("set-config", "pause_scheduler", "0"), "Resuming the scheduler", 95, 96, 10)
 		run(state, _frappe_cmd("set-maintenance-mode", "off"), "Maintenance mode off", 96, 98, 10)
 		maintenance_on = False
 		log(state, "✓ Site is back online. Everyone needs to sign in again.")
@@ -271,15 +317,21 @@ def run_restore(job):
 		save_record(state, {"safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
 			"restore_public": os.path.basename(src.get("public") or "") or None, "restore_private": os.path.basename(src.get("private") or "") or None})
 
-		# 8. optional restart — last, detached, so it can't cut this job short
+		# 8. optional restart — only when it can run without a password; last and detached
 		if state.get("restart"):
 			bench = shutil.which("bench") or os.path.expanduser("~/.local/bin/bench")
-			try:
-				subprocess.Popen([bench, "restart"], cwd=get_bench_path(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-				state["restarted"] = True
-				log(state, "↻ Restart requested (bench restart).")
-			except Exception as e:
-				log(state, f"⚠ Couldn't run bench restart ({e}) — restart the services yourself if needed.")
+			if not _supervisor_ok():
+				log(state, "↻ Restart skipped — this server needs a one-time setup so the app can restart without a password: "
+					"`sudo bench setup production <user>` (or `sudo bench setup sudoers <user>`). "
+					"A restart is not required after a restore — the site is already live.")
+			else:
+				try:
+					subprocess.Popen([bench, "restart"], cwd=get_bench_path(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+						stderr=subprocess.DEVNULL, start_new_session=True)
+					state["restarted"] = True
+					log(state, "↻ Restart requested (bench restart).")
+				except Exception as e:
+					log(state, f"⚠ Couldn't run bench restart ({e}) — restart the services yourself if needed.")
 	except Exception as e:
 		recovery = ""
 		if maintenance_on and not restored:
@@ -290,8 +342,9 @@ def run_restore(job):
 		elif maintenance_on:
 			safety = (state["outputs"].get("safety") or {}).get("db")
 			recovery = ("The site is still in MAINTENANCE MODE so nobody works on a half-restored database. "
-				f"To go back to how it was, restore the safety backup: bench --site {frappe.local.site} restore "
-				f"sites/{frappe.local.site}/private/backups/{safety} --force, then migrate and set-maintenance-mode off.")
+				f"To go back to how it was, restore the safety backup {safety} (it is in the backups list), "
+				f"or on the server: bench --site {frappe.local.site} adierp-restore-db sites/{frappe.local.site}/private/backups/{safety}, "
+				"then migrate and set-maintenance-mode off.")
 		state.update(status="Failed", stage="Restore failed", error=f"{e} {recovery}".strip(), finished=str(now_datetime()))
 		log(state, f"✗ {state['error']}")
 		write_state(state)
