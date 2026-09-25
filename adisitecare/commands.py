@@ -1,4 +1,4 @@
-"""bench --site <site> adierp-restore-db <backup.sql.gz> [--public-files x.tar] [--private-files y.tar]
+"""bench --site <site> sitecare-restore-db <backup.sql.gz> [--public-files x.tar] [--private-files y.tar]
 
 Restores a full backup INTO the site's existing database using the site's own database
 user (from site_config.json) — so, unlike `bench restore`, it needs no MariaDB root
@@ -34,7 +34,7 @@ def _import(sql_file):
 	# older Frappe can't read .gz directly — unpack next to it for the import, then remove
 	tmp = None
 	if sql_file.endswith(".gz") and "gzip" not in inspect.getsource(DbManager.restore_database):
-		tmp = sql_file[:-3] + ".adierp-tmp.sql"
+		tmp = sql_file[:-3] + ".sitecare-tmp.sql"
 		with open(tmp, "wb") as out:
 			subprocess.run(["gzip", "-cd", sql_file], stdout=out, check=True)
 		sql_file = tmp
@@ -45,7 +45,7 @@ def _import(sql_file):
 			os.remove(tmp)
 
 
-@click.command("adierp-restore-db")
+@click.command("sitecare-restore-db")
 @click.argument("sql_file")
 @click.option("--public-files", help="Public files backup (.tar / .tgz)")
 @click.option("--private-files", help="Private files backup (.tar / .tgz)")

@@ -1,10 +1,11 @@
 [project]
-name = "adi_erp_backup"
+name = "adisitecare"
 authors = [
-    { name = "Adimyra Systems Private Limited", email = "admin@adimyra.com"}
+    { name = "Md Faiyaz Ansari", email = "itsmdfaiyaz@gmail.com" },
+    { name = "Adimyra Systems Private Limited", email = "admin@adimyra.com" },
 ]
-description = "Backup and restore this Frappe/ERPNext site from Desk - safely, with maintenance mode and live progress"
-requires-python = ">=3.14"
+description = "Backup, restore and site care for Frappe / ERPNext - right from Desk"
+requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [

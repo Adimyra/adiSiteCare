@@ -1,18 +1,18 @@
 {
  "doctype": "Page",
- "name": "adierp-backup",
- "page_name": "adierp-backup",
- "title": "adiERP Backup",
- "module": "adiERP Backup",
+ "name": "sitecare",
+ "page_name": "sitecare",
+ "title": "adiSiteCare",
+ "module": "adiSiteCare",
  "standard": "Yes",
  "system_page": 0,
- "icon": "",
+ "icon": "shield",
  "roles": [
   {
    "role": "System Manager"
   }
  ],
- "modified": "2026-09-26 10:00:00.000000",
+ "modified": "2026-09-26 02:30:00.000000",
  "modified_by": "Administrator",
  "owner": "Administrator",
  "creation": "2026-09-26 10:00:00.000000"

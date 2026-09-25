@@ -1,16 +1,16 @@
-// adiERP Backup — backup, restore and site tools from Desk (Frappe v15 / v16)
-frappe.pages["adierp-backup"].on_page_load = function (wrapper) {
-	const page = frappe.ui.make_app_page({ parent: wrapper, title: __("adiERP Backup"), single_column: true });
-	wrapper.adierp = new AdiErpBackup(page);
+// adiSiteCare — backup, restore and site tools from Desk (Frappe v15 / v16)
+frappe.pages["sitecare"].on_page_load = function (wrapper) {
+	const page = frappe.ui.make_app_page({ parent: wrapper, title: __("adiSiteCare"), single_column: true });
+	wrapper.sitecare = new AdiSiteCare(page);
 };
-frappe.pages["adierp-backup"].on_page_show = function (wrapper) {
-	wrapper.adierp && wrapper.adierp.data && !wrapper.adierp.watching && wrapper.adierp.load();
+frappe.pages["sitecare"].on_page_show = function (wrapper) {
+	wrapper.sitecare && wrapper.sitecare.data && !wrapper.sitecare.watching && wrapper.sitecare.load();
 };
 
-const API = "adi_erp_backup.api.";
+const API = "adisitecare.api.";
 const CHUNK = 5 * 1024 * 1024;
 const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
-const dl = (f) => `/api/method/adi_erp_backup.api.download?file=${encodeURIComponent(f)}`;
+const dl = (f) => `/api/method/adisitecare.api.download?file=${encodeURIComponent(f)}`;
 const human = (n) => { n = +n || 0; for (const u of ["B", "KB", "MB", "GB", "TB"]) { if (n < 1024) return u === "B" ? `${n} B` : `${n.toFixed(1)} ${u}`; n /= 1024; } return `${n.toFixed(1)} PB`; };
 const dur = (s) => { s = Math.max(0, Math.round(s || 0)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`; };
 
@@ -37,7 +37,7 @@ const P = {
 };
 const ic = (n, size = 16, extra = "") => `<svg class="ae-ic ${extra}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${P[n]}"/></svg>`;
 
-class AdiErpBackup {
+class AdiSiteCare {
 	constructor(page) {
 		this.page = page;
 		this.$root = $(`<div class="ae"></div>`).appendTo(page.main);
@@ -62,6 +62,7 @@ class AdiErpBackup {
 	render() {
 		this.$root.html(`
 			${this.heroHtml()}
+			${this.statsHtml()}
 			<div class="ae-tabs">
 				${[["backup", "db", __("Backup")], ["restore", "restore", __("Restore")], ["tools", "tools", __("Tools")], ["history", "history", __("History")]]
 					.map(([k, i, l]) => `<button data-tab="${k}" class="${this.tab === k ? "on" : ""}">${ic(i, 15)}<span>${l}</span></button>`).join("")}
@@ -82,9 +83,9 @@ class AdiErpBackup {
 			<span class="dot"></span>${ic(icon, 14)}<span class="l">${label}</span><b>${value}</b></div>`;
 		return `<div class="ae-hero">
 			<div class="ae-hero-main">
-				<div class="ae-logo">${ic("shield", 26)}</div>
+				<div class="ae-logo"><img src="/assets/adisitecare/images/adiSiteCare_logo.png" alt="adiSiteCare"></div>
 				<div>
-					<div class="ae-eyebrow">adiERP Backup</div>
+					<div class="ae-eyebrow">adiSiteCare</div>
 					<div class="ae-site">${esc(d.site)}</div>
 					<div class="ae-meta">Frappe ${esc(d.frappe)} · ${__("Database")} ${esc(d.db_size)} · ${d.apps.length} ${__("apps")}</div>
 				</div>
@@ -103,6 +104,29 @@ class AdiErpBackup {
 			${h.workers === 0 ? `<div class="ae-note bad">${ic("alert", 15)}<span>${__("No background worker is running — jobs will wait in the queue. Start one with")} <code>bench worker</code> ${__("(supervisor does this in production).")}</span></div>` : ""}
 			${low ? `<div class="ae-note warn">${ic("alert", 15)}<span>${__("Low disk space — a backup or restore needs room for the files, a safety backup and the database.")}</span></div>` : ""}
 		</div>`;
+	}
+
+	statsHtml() {
+		const d = this.data, h = d.health || {}, st = d.stats || {};
+		const issues = [];
+		if (h.workers === 0) issues.push(__("no background worker"));
+		if (h.maintenance) issues.push(__("maintenance mode is on"));
+		if (h.scheduler_paused) issues.push(__("scheduler paused"));
+		if (h.emails_muted) issues.push(__("emails muted"));
+		if (d.disk.free_bytes < 5 * 1024 ** 3) issues.push(__("low disk space"));
+		if (st.last_failed) issues.push(__("last job failed"));
+		const lastB = d.backups[0];
+		const stat = (icon, cls, label, value) => `<div class="ae-stat"><div class="ae-stat-ic ${cls}">${ic(icon, 19)}</div><div><small>${label}</small><b>${value}</b></div></div>`;
+		return `<div class="ae-status ${issues.length ? "warn" : "ok"}">
+				<div class="ae-status-ic">${ic(issues.length ? "alert" : "check", 16)}</div>
+				<div><b>${issues.length ? __("Needs attention") : __("All good")}</b> — <span>${issues.length ? issues.join(" · ") : __("backups are available and the site is running normally.")}</span></div>
+			</div>
+			<div class="ae-stats">
+				${stat("clock", "", __("Last backup"), lastB ? `${esc(lastB.when.split(" ")[1])} · ${esc(lastB.when.split(" ")[0])}` : __("None yet"))}
+				${stat("db", "dark", __("Backups on server"), `${d.backups.length} · ${human(st.backup_bytes)}`)}
+				${stat("restore", "", __("Last restore"), st.last_restore ? esc(frappe.datetime.prettyDate(st.last_restore)) : __("Never"))}
+				${stat(st.failed_30 ? "alert" : "check", st.failed_30 ? "bad" : "", __("Jobs · 30 days"), `${st.ok_30 || 0} ${__("ok")} · ${st.failed_30 || 0} ${__("failed")}`)}
+			</div>`;
 	}
 
 	// ============================================================ backup tab
@@ -346,11 +370,11 @@ class AdiErpBackup {
 		const tone = (s) => ({ Success: "ok", Failed: "bad", Interrupted: "mute" }[s] || "run");
 		const icon = (j) => (j.job_type === "Restore" ? "restore" : j.job_type === "Action" ? "tools" : "db");
 		body.html(`<div class="ae-card">
-			<div class="ae-card-head"><div><h3>${__("History")}</h3><p>${__("The last 15 jobs")}</p></div><a class="btn btn-default btn-xs" href="/app/erp-backup-job">${__("All jobs")}</a></div>
+			<div class="ae-card-head"><div><h3>${__("History")}</h3><p>${__("The last 15 jobs")}</p></div><a class="btn btn-default btn-xs" href="/app/sitecare-job">${__("All jobs")}</a></div>
 			${jobs.length ? `<div class="ae-list">${jobs.map((j) => `<div class="ae-row">
 				<div class="ae-hist-ic ${tone(j.status)}">${ic(icon(j), 15)}</div>
 				<div class="ae-hist-b">
-					<div><a href="/app/erp-backup-job/${esc(j.name)}"><b>${esc(j.action || j.job_type)}${j.job_type === "Backup" && j.with_files ? " · " + __("with files") : ""}</b></a>
+					<div><a href="/app/sitecare-job/${esc(j.name)}"><b>${esc(j.action || j.job_type)}${j.job_type === "Backup" && j.with_files ? " · " + __("with files") : ""}</b></a>
 						<span class="ae-pill ${tone(j.status)}">${esc(j.status)}</span></div>
 					<small>${esc(j.name)} · ${esc(j.by)} · ${frappe.datetime.prettyDate(j.creation)}${j.error ? ` · <span class="t-bad">${esc(j.error.slice(0, 90))}</span>` : ""}</small>
 				</div>
@@ -373,7 +397,7 @@ class AdiErpBackup {
 			let st = null;
 			try {
 				if (token) {  // restore: read the public status file — the site itself is in maintenance
-					const r = await fetch(`/files/adierp-status-${token}.json?t=${Date.now()}`, { cache: "no-store" });
+					const r = await fetch(`/files/sitecare-status-${token}.json?t=${Date.now()}`, { cache: "no-store" });
 					if (r.ok) st = await r.json();
 				} else {
 					const r = await fetch(`/api/method/${API}job_status?job=${encodeURIComponent(job)}`, { headers: { Accept: "application/json" } });
@@ -462,21 +486,21 @@ class AdiErpBackup {
 	injectStyle() {
 		if (document.getElementById("ae-style")) return;
 		$("head").append(`<style id="ae-style">
-.ae{--ae-ok:#16a34a;--ae-ok-bg:rgba(22,163,74,.1);--ae-bad:#dc2626;--ae-bad-bg:rgba(220,38,38,.09);--ae-warn:#d97706;--ae-warn-bg:rgba(217,119,6,.11);--ae-run:#2563eb;--ae-run-bg:rgba(37,99,235,.1);--ae-accent:#4f46e5;
+.ae{--ae-ok:#16a34a;--ae-ok-bg:rgba(22,163,74,.1);--ae-bad:#dc2626;--ae-bad-bg:rgba(220,38,38,.09);--ae-warn:#d97706;--ae-warn-bg:rgba(217,119,6,.11);--ae-run:#2563eb;--ae-run-bg:rgba(37,99,235,.1);--ae-accent:#4D6443;--ae-brand:#112921;
 	display:flex;flex-direction:column;gap:18px;padding:6px 0 60px;max-width:1180px;margin:0 auto}
 .ae .ae-ic{flex:none;vertical-align:-2px}
 .ae code{font-size:12px;background:var(--control-bg);padding:1px 6px;border-radius:5px;color:var(--text-color)}
-.ae-hero{border-radius:18px;padding:22px 24px;color:#e2e8f0;background:radial-gradient(1200px 300px at 0% 0%,#312e81 0%,transparent 60%),linear-gradient(135deg,#0f172a,#1e293b);box-shadow:0 10px 30px -12px rgba(15,23,42,.5);display:flex;flex-direction:column;gap:16px}
+.ae-hero{border-radius:18px;padding:22px 24px;color:#e2e8f0;background:radial-gradient(900px 280px at 0% 0%,rgba(77,100,67,.55) 0%,transparent 60%),radial-gradient(600px 240px at 100% 100%,rgba(143,174,126,.18) 0%,transparent 60%),linear-gradient(135deg,#112921,#183a2d);box-shadow:0 12px 32px -14px rgba(17,41,33,.7);display:flex;flex-direction:column;gap:16px}
 .ae-hero code{background:rgba(255,255,255,.1);color:#fff}
 .ae-hero-main{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
-.ae-logo{width:52px;height:52px;border-radius:14px;display:grid;place-items:center;background:linear-gradient(135deg,#6366f1,#22d3ee);color:#fff;box-shadow:0 6px 18px -6px #6366f1}
-.ae-eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#a5b4fc;font-weight:600}
+.ae-logo{width:58px;height:58px;border-radius:16px;display:grid;place-items:center;background:#fff;box-shadow:0 8px 20px -8px rgba(0,0,0,.5);overflow:hidden;flex:none}.ae-logo img{width:50px;height:50px;object-fit:contain}
+.ae-eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#b5cfa5;font-weight:600}
 .ae-site{font-size:22px;font-weight:700;color:#fff;letter-spacing:-.01em}
 .ae-meta{font-size:12.5px;color:#94a3b8}
 .ae-disk{margin-left:auto;min-width:220px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 14px}
 .ae-disk-top{display:flex;justify-content:space-between;font-size:12px;color:#94a3b8}.ae-disk-top b{color:#fff}.ae-disk-top b.bad{color:#fca5a5}
 .ae-disk-bar{height:6px;border-radius:9px;background:rgba(255,255,255,.12);margin:7px 0 5px;overflow:hidden}
-.ae-disk-bar div{height:100%;background:linear-gradient(90deg,#22d3ee,#6366f1);border-radius:9px}.ae-disk-bar div.bad{background:linear-gradient(90deg,#f59e0b,#ef4444)}
+.ae-disk-bar div{height:100%;background:linear-gradient(90deg,#b5cfa5,#6d8a5f);border-radius:9px}.ae-disk-bar div.bad{background:linear-gradient(90deg,#f59e0b,#ef4444)}
 .ae-disk-sub{font-size:11px;color:#64748b}
 .ae-chips{display:flex;gap:8px;flex-wrap:wrap}
 .ae-chip{display:flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);font-size:12.5px;color:#cbd5e1}
@@ -497,14 +521,14 @@ class AdiErpBackup {
 .ae-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
 .ae-tile{display:flex;gap:12px;align-items:center;border:1.5px solid var(--border-color);border-radius:13px;padding:14px 16px;cursor:pointer;margin:0;transition:.15s;font-weight:400}
 .ae-tile input{display:none}.ae-tile b{display:block;font-size:13.5px}.ae-tile small{color:var(--text-muted);font-size:12px}
-.ae-tile:hover{border-color:var(--gray-400,#9ca3af)}.ae-tile.on{border-color:var(--ae-accent);background:rgba(79,70,229,.05);box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+.ae-tile:hover{border-color:var(--gray-400,#9ca3af)}.ae-tile.on{border-color:var(--ae-accent);background:rgba(77,100,67,.05);box-shadow:0 0 0 3px rgba(77,100,67,.1)}
 .ae-tile-ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--control-bg);color:var(--text-muted);flex:none}.ae-tile.on .ae-tile-ic{background:var(--ae-accent);color:#fff}
 .ae-list{display:flex;flex-direction:column}
 .ae-row{display:flex;align-items:center;gap:14px;padding:12px 4px;border-top:1px solid var(--border-color);flex-wrap:wrap}.ae-row:first-child{border-top:none}
 .ae-row-when{min-width:88px;display:flex;flex-direction:column}.ae-row-when b{font-size:14px}.ae-row-when small{color:var(--text-muted);font-size:11.5px}
 .ae-files{display:flex;gap:6px;flex-wrap:wrap;flex:1}
 .ae-file{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:9px;background:var(--control-bg);font-size:12px;color:var(--text-color);text-decoration:none!important;border:1px solid transparent;transition:.15s}
-.ae-file span{color:var(--text-muted)}.ae-file .dl{opacity:.35}.ae-file:hover{border-color:var(--ae-accent);background:rgba(79,70,229,.06)}.ae-file:hover .dl{opacity:1;color:var(--ae-accent)}
+.ae-file span{color:var(--text-muted)}.ae-file .dl{opacity:.35}.ae-file:hover{border-color:var(--ae-accent);background:rgba(77,100,67,.06)}.ae-file:hover .dl{opacity:1;color:var(--ae-accent)}
 .ae-tag{font-size:11px;padding:3px 8px;border-radius:6px;background:var(--ae-run-bg);color:var(--ae-run);align-self:center}
 .ae-empty{display:flex;flex-direction:column;align-items:center;gap:8px;padding:28px;color:var(--text-muted);font-size:13px}
 .ae-flow{display:flex;align-items:center;gap:6px;padding:14px;border-radius:12px;background:var(--control-bg);margin-bottom:6px;overflow-x:auto}
@@ -522,7 +546,7 @@ class AdiErpBackup {
 .ae-field small{color:var(--text-muted);font-weight:400;font-size:11.5px}
 .ae-drop{position:relative;display:flex;align-items:center;gap:12px;border:1.5px dashed var(--border-color);border-radius:13px;padding:14px;margin:0;cursor:pointer;overflow:hidden;transition:.15s;font-weight:400}
 .ae-drop input{position:absolute;inset:0;opacity:0;cursor:pointer}
-.ae-drop:hover,.ae-drop.over{border-color:var(--ae-accent);background:rgba(79,70,229,.04)}
+.ae-drop:hover,.ae-drop.over{border-color:var(--ae-accent);background:rgba(77,100,67,.04)}
 .ae-drop.has{border-style:solid;border-color:var(--ae-accent)}.ae-drop.done{border-color:var(--ae-ok);background:var(--ae-ok-bg)}.ae-drop.err{border-color:var(--ae-bad);background:var(--ae-bad-bg)}
 .ae-drop-ic{width:38px;height:38px;border-radius:10px;display:grid;place-items:center;background:var(--control-bg);color:var(--ae-accent);flex:none}
 .ae-drop-t{display:flex;flex-direction:column;min-width:0}.ae-drop-t b{font-size:13px}.ae-drop-t small{color:var(--text-muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -540,7 +564,7 @@ class AdiErpBackup {
 .ae-switch-b{flex:1;display:flex;flex-direction:column;gap:3px}.ae-switch-b>b{font-size:13.5px}.ae-switch-b>small{color:var(--text-muted);font-size:12px}
 .ae-tools{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
 .ae-tool{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--border-color);border-radius:13px;padding:14px}
-.ae-tool.hi{border-color:rgba(79,70,229,.4);background:rgba(79,70,229,.04)}
+.ae-tool.hi{border-color:rgba(77,100,67,.4);background:rgba(77,100,67,.04)}
 .ae-tool-ic{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;background:var(--control-bg);color:var(--ae-accent);flex:none}
 .ae-tool-b{flex:1;display:flex;flex-direction:column;gap:3px}.ae-tool-b b{font-size:13.5px}.ae-tool-b small{color:var(--text-muted);font-size:12px}.ae-tool-b small.ae-tool-note{color:var(--ae-warn)}
 .ae-hist-ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none}
@@ -550,9 +574,9 @@ class AdiErpBackup {
 .ae-job-head{display:flex;align-items:center;gap:14px}.ae-job-t{flex:1;min-width:0}.ae-job-t h3{margin:6px 0 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ae-job-t small{color:var(--text-muted);font-size:12px}
 .ae-job-pct{font-size:30px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}.ae-job-pct small{font-size:15px;color:var(--text-muted)}
 .ae-bar{height:8px;border-radius:9px;background:var(--control-bg);overflow:hidden}
-.ae-bar div{height:100%;border-radius:9px;background:linear-gradient(90deg,#6366f1,#22d3ee);transition:width .8s ease}
+.ae-bar div{height:100%;border-radius:9px;background:linear-gradient(90deg,#4D6443,#8fae7e);transition:width .8s ease}
 .ae-bar.ok div{background:linear-gradient(90deg,#22c55e,#16a34a)}.ae-bar.bad div{background:linear-gradient(90deg,#f87171,#dc2626)}
-.ae-bar.live div{background-image:linear-gradient(45deg,rgba(255,255,255,.25) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.25) 50%,rgba(255,255,255,.25) 75%,transparent 75%),linear-gradient(90deg,#6366f1,#22d3ee);background-size:18px 18px,100% 100%;animation:ae-stripe 1s linear infinite}
+.ae-bar.live div{background-image:linear-gradient(45deg,rgba(255,255,255,.25) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.25) 50%,rgba(255,255,255,.25) 75%,transparent 75%),linear-gradient(90deg,#4D6443,#8fae7e);background-size:18px 18px,100% 100%;animation:ae-stripe 1s linear infinite}
 @keyframes ae-stripe{to{background-position:18px 0,0 0}}
 .ae-links{display:flex;gap:8px;flex-wrap:wrap}
 .ae-job-grid{display:grid;grid-template-columns:250px 1fr;gap:14px}.ae-job-grid.nosteps{grid-template-columns:1fr}
@@ -566,16 +590,29 @@ class AdiErpBackup {
 .ae-step.skipped{opacity:.55}.ae-step.pending{opacity:.7}
 .ae-spin{width:12px;height:12px;border-radius:50%;border:2px solid var(--ae-run);border-right-color:transparent;display:inline-block;animation:ae-rot .7s linear infinite}.ae-spin.sm{width:10px;height:10px}
 @keyframes ae-rot{to{transform:rotate(360deg)}}
-.ae-term{border-radius:12px;overflow:hidden;background:#0b1020;border:1px solid #1e293b;box-shadow:0 12px 30px -16px rgba(0,0,0,.6);min-width:0}
-.ae-term-bar{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#141a2e;border-bottom:1px solid #1e293b}
+.ae-term{border-radius:12px;overflow:hidden;background:#0c1a15;border:1px solid #1f3a2f;box-shadow:0 12px 30px -16px rgba(0,0,0,.6);min-width:0}
+.ae-term-bar{display:flex;align-items:center;gap:7px;padding:9px 12px;background:#13261e;border-bottom:1px solid #1f3a2f}
 .ae-term-bar i{width:11px;height:11px;border-radius:50%;background:#ff5f57}.ae-term-bar i:nth-child(2){background:#febc2e}.ae-term-bar i:nth-child(3){background:#28c840}
 .ae-term-bar span{flex:1;text-align:center;font-size:11.5px;color:#64748b;font-family:ui-monospace,Menlo,monospace}
 .ae-term-copy{background:none;border:none;color:#64748b;padding:2px}.ae-term-copy:hover{color:#e2e8f0}
-.ae-term-body{padding:12px 14px;height:360px;overflow:auto;font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#94a3b8;white-space:pre-wrap;word-break:break-word}
+.ae-term-body{padding:12px 14px;height:360px;overflow:auto;font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#a3b8ad;white-space:pre-wrap;word-break:break-word}
 .ae-term-body .c-cmd{color:#e2e8f0;font-weight:600;margin-top:6px}.ae-term-body .c-ps{color:#22c55e;margin-right:2px}
-.ae-term-body .c-ok{color:#4ade80}.ae-term-body .c-bad{color:#f87171}.ae-term-body .c-warn{color:#fbbf24}.ae-term-body .c-info{color:#67e8f9}.ae-term-body .c-file{color:#a5b4fc}
+.ae-term-body .c-ok{color:#4ade80}.ae-term-body .c-bad{color:#f87171}.ae-term-body .c-warn{color:#fbbf24}.ae-term-body .c-info{color:#67e8f9}.ae-term-body .c-file{color:#b5cfa5}
 .ae-cursor{display:inline-block;width:8px;height:15px;background:#4ade80;vertical-align:-3px;animation:ae-blink 1s steps(1) infinite}
 @keyframes ae-blink{50%{opacity:0}}
+.ae .btn-primary{background:var(--ae-brand);border-color:var(--ae-brand);color:#fff}.ae .btn-primary:hover,.ae .btn-primary:focus{background:var(--ae-accent);border-color:var(--ae-accent)}
+.ae-sec-n{background:var(--ae-brand)!important}
+.ae-status{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:14px;font-size:13px}
+.ae-status.ok{background:rgba(77,100,67,.1);color:#3c5234;border:1px solid rgba(77,100,67,.25)}
+.ae-status.warn{background:var(--ae-warn-bg);color:#92400e;border:1px solid rgba(217,119,6,.25)}
+.ae-status-ic{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;color:#fff;flex:none}
+.ae-status.ok .ae-status-ic{background:var(--ae-accent)}.ae-status.warn .ae-status-ic{background:var(--ae-warn)}
+.ae-status b{font-size:13.5px}.ae-status span{opacity:.85}
+.ae-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
+.ae-stat{display:flex;align-items:center;gap:12px;background:var(--card-bg);border:1px solid var(--border-color);border-radius:14px;padding:14px 16px}
+.ae-stat-ic{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;flex:none;background:rgba(77,100,67,.12);color:var(--ae-accent)}
+.ae-stat-ic.dark{background:var(--ae-brand);color:#b5cfa5}.ae-stat-ic.bad{background:var(--ae-bad-bg);color:var(--ae-bad)}
+.ae-stat small{display:block;color:var(--text-muted);font-size:11.5px}.ae-stat b{font-size:15px;font-weight:650}
 @media (max-width:1100px){.ae-job-grid{grid-template-columns:1fr}.ae-steps{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr))}}
 @media (max-width:768px){.ae-disk{margin-left:0;width:100%}.ae-hero{padding:18px}.ae-card{padding:16px}}
 		</style>`);

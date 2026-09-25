@@ -1,69 +1,122 @@
-### adiERP Backup
+<div align="center">
 
-Backup and restore a Frappe / ERPNext site from Desk — safely, with maintenance mode and live progress.
-Works on Frappe **v15** and **v16**. Page: **/app/adierp-backup** (System Manager only).
+<img src="adisitecare/public/images/adiSiteCare_logo.png" alt="adiSiteCare" width="140">
 
-#### Backup
-- Runs `bench --site <site> backup` (optionally `--with-files`) in the background (long queue).
-- Live progress + terminal log; download links for database, public files, private files and site config when done.
-- Lists all backups in `sites/<site>/private/backups` with download and "Restore this".
+# adiSiteCare
 
-#### Restore
-Typical use: take a backup on **production**, download it, upload it on **staging** and restore.
-Or restore an older backup that is already on the same server.
+**Backup, restore and site care for Frappe / ERPNext — right from Desk.**
 
-Upload the database backup (`.sql.gz` / `.sql`), optionally the public / private files (`.tar` / `.tgz`) and the
-site config backup (`.json`) — uploads are chunked (large files work) and saved straight into
-`sites/<site>/private/backups`, next to the backups `bench backup` makes. No other folders are used.
-Then **Start restore** runs, in order:
+No SSH. No MariaDB root password. No sudo. Just a safe, guided page with a live terminal.
 
-1. Pre-flight checks — gzip integrity, partial backup, downgrade warning, SQL validation
-2. **Safety backup** of the current site (your undo point, also in `private/backups`)
-3. **Maintenance mode ON** — verified in `site_config.json` before continuing — and scheduler paused
-4. `bench --site <site> adierp-restore-db <db> [--public-files …] [--private-files …]`
-5. Re-installs adiERP Backup if the backup predates it
-6. `migrate`, `clear-cache`, `clear-website-cache`
-7. Scheduler resumed, **maintenance mode OFF**
-8. Optional `bench restart`
+[![License: MIT](https://img.shields.io/badge/License-MIT-4D6443.svg)](license.txt)
+[![Frappe](https://img.shields.io/badge/Frappe-v15%20%7C%20v16-112921.svg)](https://frappeframework.com)
+[![ERPNext](https://img.shields.io/badge/ERPNext-v15%20%7C%20v16-4D6443.svg)](https://erpnext.com)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-112921.svg)](https://www.python.org)
+[![Made by Adimyra](https://img.shields.io/badge/made%20by-Adimyra-4D6443.svg)](https://adimyra.com)
 
-#### No server passwords needed
-- **No MariaDB root password.** `bench restore` needs root because it drops and re-creates the database.
-  adiERP Backup instead clears and re-imports the site's *existing* database with the site's own database
-  user from `site_config.json` — the same user the site already runs with. Nothing to type, nothing in code.
-  The same command works from a terminal: `bench --site <site> adierp-restore-db <file.sql.gz>`.
-- **No sudo password.** A restart is not needed after a restore (code doesn't change, caches are cleared).
-  "Restart bench" only runs when this user can control supervisor without a password — true on servers set up
-  with `sudo bench setup production <user>` (or `sudo bench setup sudoers <user>`); otherwise it is skipped.
-- **Restoring another site's backup** (production → staging): add its site config backup — only its
-  `encryption_key` is copied, so saved passwords (email accounts, integrations) keep working.
-- **Staging copy** option keeps `mute_emails` on and the scheduler paused, so production data on staging never
-  emails real customers.
+</div>
 
-#### Tools
-- **Site switches** — outgoing emails (`mute_emails`) and scheduler (`pause_scheduler`) on/off. When unmuting, the emails
-  waiting in the Email Queue can be discarded first (recommended on staging — they may be production emails).
-- **Run a command** with the live terminal: *After-restore tasks* (migrate → clear cache → clear website cache → restart),
-  *Migrate*, *Clear cache*, *Restart bench*. Use After-restore tasks if a restore ran without restart.
+---
 
-#### Safety
-- System Manager only; restore also needs the site name typed exactly and the user's password.
-- Only one job at a time; disk space is checked first.
-- Progress during restore is read from a small status file (`public/files/adierp-status-<random>.json`),
-  so it keeps working while the site is in maintenance mode.
-- If the restore fails **before** the database is touched, maintenance mode is switched off again.
-  If it fails **after**, the site stays in maintenance mode and the log shows how to recover from the safety backup.
-- Downloads are sent byte-exact as attachments (Frappe's `/backups/` link can be re-encoded by the browser on
-  servers without nginx).
+## Why adiSiteCare?
 
-#### Requirements
-- A running background worker for the `long` queue (`bench worker` / supervisor in production).
-- Enough free disk space for the backup files, a safety backup and the restored database.
+Restoring a Frappe site usually means SSH access, typing `bench` commands, knowing the MariaDB root
+password and remembering every step: backup first, maintenance mode on, restore, migrate, clear cache,
+maintenance off, restart. adiSiteCare turns that into one guided page on Desk — with the same commands
+running underneath, shown live in a terminal window, and safety checks at every step.
 
-#### Install
+**Typical use:** take a backup on *production*, download it, upload it on *staging* and restore — or roll
+a site back to an earlier backup on the same server.
+
+## Features
+
+### 🗄️ Backup
+- One click `bench --site <site> backup` — database only, or **with files** (public + private)
+- Runs in the background with a live terminal, progress bar and step checklist
+- Every backup file is checked after it's written; byte-exact downloads (database, files, site config)
+- All backups on the server listed with size, download and **Restore** buttons
+
+### ♻️ Restore
+- **Upload** a backup (large files are uploaded in chunks) or **pick one already on the server**
+- Optional public / private files and site config (for the encryption key of another site)
+- Guided, safe order — each step verified before the next:
+  1. Check the backup files — gzip integrity, partial backup, Frappe version, SQL validation
+  2. **Safety backup** of the site as it is now — your undo point
+  3. **Maintenance mode on** — confirmed in `site_config.json` before touching anything — scheduler paused
+  4. Restore database and files
+  5. `migrate`, `clear-cache`, `clear-website-cache`
+  6. Back online — maintenance off, scheduler resumed
+  7. Optional `bench restart`
+- **Staging mode** — keeps outgoing emails muted and the scheduler paused, so production data on a
+  staging site never emails real customers
+- Progress keeps updating even while the site is in maintenance mode
+
+### 🛠️ Tools
+- **Site switches** — mute / unmute outgoing emails, pause / resume the scheduler.
+  When unmuting, emails waiting in the queue can be discarded first
+- **After-restore tasks** — migrate → clear cache → clear website cache → restart, in one click
+- **Migrate**, **Clear cache**, **Restart bench** — each with the live terminal
+
+### 📊 Dashboard & workspace
+- Health bar: maintenance, scheduler, emails, background workers, disk space — *All good* or *Needs attention*
+- Last backup, backups on server, last restore, jobs in the last 30 days
+- **adiSiteCare** workspace with shortcuts and number cards; every run is kept as a **SiteCare Job** with its full log
+
+## No server passwords needed
+
+| | `bench restore` | adiSiteCare |
+|---|---|---|
+| MariaDB root password | required — it drops and re-creates the database | **not needed** — clears and re-imports the site's own database with the site's own database user |
+| Server / sudo password | needed for `bench restart` | **not needed** — restart only runs where supervisor is reachable without a password, otherwise it is skipped |
+| Secrets in code or config | — | **none** |
+
+The same password-free restore is available on the command line:
+
 ```bash
-bench get-app https://github.com/Adimyra/adiERPBackup
-bench --site <site> install-app adi_erp_backup
+bench --site <site> sitecare-restore-db path/to/backup.sql.gz [--public-files files.tar] [--private-files private-files.tar]
 ```
 
-#### License
-MIT
+> **Restart without a password (optional):** run once on the server — `sudo bench setup production <user>`
+> (or `sudo bench setup sudoers <user>`). A restart is not required after a restore.
+
+## Safety
+
+- **System Manager only.** A restore also asks for the site name (typed exactly) and the user's own login password.
+- **One job at a time**, and free disk space is checked before starting.
+- **Maintenance mode is verified** before the database is touched.
+- If a restore fails **before** the database changes, the site is put back online automatically.
+  If it fails **after**, the site stays in maintenance mode and the log shows exactly how to recover from the safety backup.
+- Damaged uploads (for example a `.sql.gz` that a browser unpacked while downloading) are rejected immediately with a clear message.
+- Files stay in `sites/<site>/private/backups` — the same folder `bench backup` uses. No extra folders.
+
+## Installation
+
+```bash
+cd frappe-bench
+bench get-app https://github.com/Adimyra/adiSiteCare
+bench --site <your-site> install-app adisitecare
+```
+
+Open **adiSiteCare** from the apps screen, or go to `/app/sitecare`.
+
+### Requirements
+- Frappe / ERPNext **v15 or v16**, MariaDB
+- A background worker for the `long` queue — `bench worker` in development, supervisor in production
+- Enough free disk space for the backup, a safety backup and the restored database
+
+## Credits
+
+Designed and built by **[Md Faiyaz Ansari](https://github.com/itsfaiyaz)** ([@itsfaiyaz](https://github.com/itsfaiyaz))
+at **[Adimyra Systems Private Limited](https://adimyra.com)**.
+
+### Contributors
+
+<a href="https://github.com/itsfaiyaz"><img src="https://github.com/itsfaiyaz.png" width="64" height="64" alt="itsfaiyaz" style="border-radius:50%"></a>
+
+**Md Faiyaz Ansari** — [@itsfaiyaz](https://github.com/itsfaiyaz) · author & maintainer
+
+Contributions are welcome — open an issue or a pull request.
+
+## License
+
+[MIT](license.txt) © 2026 Md Faiyaz Ansari, Adimyra Systems Private Limited

@@ -1,0 +1,108 @@
+{
+ "app": "adisitecare",
+ "charts": [],
+ "content": "[{\"id\": \"sc_hdr\", \"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>adiSiteCare</b> \\u2014 backup, restore &amp; site care</span>\", \"col\": 12}}, {\"id\": \"sc_nc1\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"SiteCare Backups\", \"col\": 4}}, {\"id\": \"sc_nc2\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"SiteCare Restores\", \"col\": 4}}, {\"id\": \"sc_nc3\", \"type\": \"number_card\", \"data\": {\"number_card_name\": \"SiteCare Failed Jobs\", \"col\": 4}}, {\"id\": \"sc_sp\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"sc_s1\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"SiteCare Dashboard\", \"col\": 4}}, {\"id\": \"sc_s2\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Jobs\", \"col\": 4}}, {\"id\": \"sc_s3\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Failed Jobs\", \"col\": 4}}, {\"id\": \"sc_sp2\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"sc_c1\", \"type\": \"card\", \"data\": {\"card_name\": \"Site Care\", \"col\": 4}}, {\"id\": \"sc_c2\", \"type\": \"card\", \"data\": {\"card_name\": \"Records\", \"col\": 4}}]",
+ "creation": "2026-09-26 03:00:00.000000",
+ "custom_blocks": [],
+ "docstatus": 0,
+ "doctype": "Workspace",
+ "for_user": "",
+ "hide_custom": 0,
+ "icon": "shield",
+ "idx": 0,
+ "is_hidden": 0,
+ "label": "adiSiteCare",
+ "links": [
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Site Care",
+   "link_count": 1,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "SiteCare Dashboard",
+   "link_count": 0,
+   "link_to": "sitecare",
+   "link_type": "Page",
+   "onboard": 1,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Records",
+   "link_count": 1,
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "SiteCare Job",
+   "link_count": 0,
+   "link_to": "SiteCare Job",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-09-26 03:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "adiSiteCare",
+ "name": "adiSiteCare",
+ "number_cards": [
+  {
+   "label": "Backups",
+   "number_card_name": "SiteCare Backups"
+  },
+  {
+   "label": "Restores",
+   "number_card_name": "SiteCare Restores"
+  },
+  {
+   "label": "Failed",
+   "number_card_name": "SiteCare Failed Jobs"
+  }
+ ],
+ "owner": "Administrator",
+ "parent_page": "",
+ "public": 1,
+ "quick_lists": [],
+ "roles": [
+  {
+   "role": "System Manager"
+  }
+ ],
+ "sequence_id": 50.0,
+ "shortcuts": [
+  {
+   "color": "Green",
+   "doc_view": "",
+   "label": "SiteCare Dashboard",
+   "link_to": "sitecare",
+   "type": "Page"
+  },
+  {
+   "color": "Grey",
+   "doc_view": "List",
+   "label": "Jobs",
+   "link_to": "SiteCare Job",
+   "type": "DocType"
+  },
+  {
+   "color": "Red",
+   "doc_view": "List",
+   "format": "{} Failed",
+   "label": "Failed Jobs",
+   "link_to": "SiteCare Job",
+   "stats_filter": "[[\"SiteCare Job\",\"status\",\"=\",\"Failed\"]]",
+   "type": "DocType"
+  }
+ ],
+ "title": "adiSiteCare",
+ "type": "Workspace"
+}

@@ -4,5 +4,5 @@
 from frappe.model.document import Document
 
 
-class ERPBackupJob(Document):
-	"""A backup or restore run from the adiERP Backup page. Created and updated only by the app."""
+class SiteCareJob(Document):
+	"""A backup or restore run from adiSiteCare. Created and updated only by the app."""

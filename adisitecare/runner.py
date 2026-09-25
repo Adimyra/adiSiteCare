@@ -18,7 +18,7 @@ import time
 import frappe
 from frappe.utils import get_bench_path, now_datetime
 
-APP = "adi_erp_backup"
+APP = "adisitecare"
 DB_EXTS = (".sql.gz", ".sql")
 FILE_EXTS = (".tar", ".tgz")
 
@@ -28,7 +28,7 @@ FILE_EXTS = (".tar", ".tgz")
 # Backup files live only where `bench backup` puts them: sites/<site>/private/backups.
 # Job progress lives in Redis (it survives the database being replaced), and for a
 # restore also in one small file the page can read while the site is in maintenance:
-#   sites/<site>/public/files/adierp-status-<random token>.json
+#   sites/<site>/public/files/sitecare-status-<random token>.json
 
 
 def backups_dir():
@@ -36,7 +36,7 @@ def backups_dir():
 
 
 def public_status_path(token):
-	return frappe.get_site_path("public", "files", f"adierp-status-{token}.json")
+	return frappe.get_site_path("public", "files", f"sitecare-status-{token}.json")
 
 
 def _cache():
@@ -73,7 +73,7 @@ def write_state(state):
 def cleanup_status_files(days=7):
 	d = frappe.get_site_path("public", "files")
 	for fn in os.listdir(d) if os.path.isdir(d) else []:
-		if fn.startswith("adierp-status-"):
+		if fn.startswith("sitecare-status-"):
 			path = os.path.join(d, fn)
 			if time.time() - os.path.getmtime(path) > days * 86400:
 				try:
@@ -195,16 +195,16 @@ def site_config():
 def save_record(state, fields=None):
 	try:
 		frappe.db.rollback()
-		if not frappe.db.table_exists("ERP Backup Job"):
+		if not frappe.db.table_exists("SiteCare Job"):
 			return
 		values = {
 			"status": state["status"], "stage": state["stage"], "progress": state["progress"], "log": state["log"][-60000:],
 			"error": state.get("error") or None, "finished_on": state.get("finished"), **(fields or {}),
 		}
-		if frappe.db.exists("ERP Backup Job", state["job"]):
-			frappe.db.set_value("ERP Backup Job", state["job"], values, update_modified=True)
+		if frappe.db.exists("SiteCare Job", state["job"]):
+			frappe.db.set_value("SiteCare Job", state["job"], values, update_modified=True)
 		else:  # the job's own record went away with the restored database — put it back
-			doc = frappe.get_doc({"doctype": "ERP Backup Job", "job_type": state["type"], "requested_by": state.get("user"),
+			doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": state["type"], "requested_by": state.get("user"),
 				"with_files": state.get("with_files", 0), "restart_after": state.get("restart", 0), "started_on": state.get("started"),
 				"status_token": state.get("token"), **values})
 			doc.name = state["job"]
@@ -242,7 +242,7 @@ def _reconnect():
 def _reconcile(job):
 	"""A restored database brings back job records as they were at backup time — close the ones still 'running'."""
 	try:
-		frappe.db.sql("""update `tabERP Backup Job` set status='Interrupted', stage='Closed — this record came back with a restored backup'
+		frappe.db.sql("""update `tabSiteCare Job` set status='Interrupted', stage='Closed — this record came back with a restored backup'
 			where status in ('Queued', 'Running') and name != %s""", job)
 		frappe.db.commit()
 	except Exception:
@@ -425,7 +425,7 @@ def run_restore(job):
 
 		set_step(state, "restore")
 		# 4. restore — with the site's own database user, so no MariaDB root password is needed
-		args = ["adierp-restore-db", db]
+		args = ["sitecare-restore-db", db]
 		if src.get("public"):
 			args += ["--public-files", src["public"]]
 		if src.get("private"):
@@ -441,7 +441,7 @@ def run_restore(job):
 		# 5. keep this tool on the site even if the backup is from before it was installed
 		apps = subprocess.run(_frappe_cmd("list-apps"), cwd=os.path.join(get_bench_path(), "sites"), capture_output=True, text=True).stdout
 		if APP not in apps:
-			run(state, _frappe_cmd("install-app", APP), "Re-installing adiERP Backup", 70, 74, 60)
+			run(state, _frappe_cmd("install-app", APP), "Re-installing adiSiteCare", 70, 74, 60)
 
 		set_step(state, "migrate")
 		# 6. migrate + caches
@@ -485,7 +485,7 @@ def run_restore(job):
 			safety = (state["outputs"].get("safety") or {}).get("db")
 			recovery = ("The site is still in MAINTENANCE MODE so nobody works on a half-restored database. "
 				f"To go back to how it was, restore the safety backup {safety} (it is in the backups list), "
-				f"or on the server: bench --site {frappe.local.site} adierp-restore-db sites/{frappe.local.site}/private/backups/{safety}, "
+				f"or on the server: bench --site {frappe.local.site} sitecare-restore-db sites/{frappe.local.site}/private/backups/{safety}, "
 				"then migrate and set-maintenance-mode off.")
 		finish_steps(state, False)
 		state.update(status="Failed", stage="Restore failed", error=f"{e} {recovery}".strip(), finished=str(now_datetime()))
@@ -506,7 +506,7 @@ def _notify(state):
 		if not user or user == "Guest" or not frappe.db.table_exists("Notification Log"):
 			return
 		ok = state["status"] == "Success"
-		frappe.get_doc({"doctype": "Notification Log", "for_user": user, "type": "Alert", "document_type": "ERP Backup Job",
+		frappe.get_doc({"doctype": "Notification Log", "for_user": user, "type": "Alert", "document_type": "SiteCare Job",
 			"document_name": state["job"], "subject": f"{state['type']} {'completed' if ok else 'FAILED'} · {state['job']}" + ("" if ok else f" — {state.get('error', '')[:120]}")}).insert(ignore_permissions=True)
 		frappe.db.commit()
 	except Exception:

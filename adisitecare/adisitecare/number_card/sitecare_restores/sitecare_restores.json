@@ -1,0 +1,21 @@
+{
+ "color": "#112921",
+ "creation": "2026-09-26 03:00:00.000000",
+ "docstatus": 0,
+ "doctype": "Number Card",
+ "document_type": "SiteCare Job",
+ "filters_json": "[[\"SiteCare Job\", \"job_type\", \"=\", \"Restore\"], [\"SiteCare Job\", \"status\", \"=\", \"Success\"]]",
+ "function": "Count",
+ "idx": 0,
+ "is_public": 1,
+ "is_standard": 1,
+ "label": "Restores",
+ "modified": "2026-09-26 03:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "adiSiteCare",
+ "name": "SiteCare Restores",
+ "owner": "Administrator",
+ "show_percentage_stats": 1,
+ "stats_time_interval": "Monthly",
+ "type": "Document Type"
+}

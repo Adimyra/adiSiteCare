@@ -8,7 +8,7 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        files: "adi_erp_backup.*"
+        files: "adisitecare.*"
         exclude: ".*json$|.*txt$|.*csv|.*md|.*svg"
       - id: check-merge-conflict
       - id: check-ast
@@ -38,11 +38,11 @@ repos:
         # Ignore any files that might contain jinja / bundles
         exclude: |
             (?x)^(
-                adi_erp_backup/public/dist/.*|
+                adisitecare/public/dist/.*|
                 .*node_modules.*|
                 .*boilerplate.*|
-                adi_erp_backup/templates/includes/.*|
-                adi_erp_backup/public/js/lib/.*
+                adisitecare/templates/includes/.*|
+                adisitecare/public/js/lib/.*
             )$
 
 
@@ -55,12 +55,12 @@ repos:
         # Ignore any files that might contain jinja / bundles
         exclude: |
             (?x)^(
-                adi_erp_backup/public/dist/.*|
+                adisitecare/public/dist/.*|
                 cypress/.*|
                 .*node_modules.*|
                 .*boilerplate.*|
-                adi_erp_backup/templates/includes/.*|
-                adi_erp_backup/public/js/lib/.*
+                adisitecare/templates/includes/.*|
+                adisitecare/public/js/lib/.*
             )$
 
 ci:

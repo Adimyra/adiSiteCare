@@ -1,4 +1,4 @@
-"""Endpoints for the adiERP Backup page — System Manager only. Restore also asks for the
+"""Endpoints for the adiSiteCare page — System Manager only. Restore also asks for the
 user's password and the site name, like any destructive operation should."""
 
 import os
@@ -10,7 +10,7 @@ import frappe
 from frappe import _
 from frappe.utils import cint, get_bench_path, now_datetime
 
-from adi_erp_backup import runner
+from adisitecare import runner
 
 CHUNK_LIMIT = 8 * 1024 * 1024  # per upload request
 
@@ -34,11 +34,23 @@ def _human(n):
 
 def _busy_job():
 	"""A job counts as busy only while it is really alive (its live state says so and it moved recently)."""
-	for name in frappe.get_all("ERP Backup Job", {"status": ["in", ["Queued", "Running"]]}, pluck="name", order_by="creation desc"):
+	for name in frappe.get_all("SiteCare Job", {"status": ["in", ["Queued", "Running"]]}, pluck="name", order_by="creation desc"):
 		state = runner.read_state(name)
 		if state and state.get("status") in ("Queued", "Running") and time.time() - (state.get("now_ts") or 0) < 2 * 3600:
 			return name
 	return None
+
+
+def _stats(backups):
+	since = frappe.utils.add_days(now_datetime(), -30)
+	last = frappe.get_all("SiteCare Job", fields=["status"], order_by="creation desc", limit=1)
+	return {
+		"backup_bytes": sum(f["bytes"] for g in backups for f in g["files"].values()),
+		"last_restore": frappe.db.get_value("SiteCare Job", {"job_type": "Restore", "status": "Success"}, "creation", order_by="creation desc"),
+		"ok_30": frappe.db.count("SiteCare Job", {"status": "Success", "creation": [">=", since]}),
+		"failed_30": frappe.db.count("SiteCare Job", {"status": "Failed", "creation": [">=", since]}),
+		"last_failed": bool(last and last[0].status == "Failed"),
+	}
 
 
 def _health():
@@ -80,7 +92,7 @@ def overview() -> dict:
 	if os.path.isdir(d):
 		for fn in os.listdir(d):
 			m = re.match(r"^(\d{8}_\d{6})-", fn)
-			if not m or "adierp-tmp" in fn:
+			if not m or "sitecare-tmp" in fn:
 				continue
 			kind = ("db" if fn.endswith((".sql.gz", ".sql")) else "private" if fn.endswith(("private-files.tar", "private-files.tgz", "private-files.tar.gz"))
 				else "public" if fn.endswith(("files.tar", "files.tgz", "files.tar.gz")) else "config" if fn.endswith(".json") else None)
@@ -94,7 +106,7 @@ def overview() -> dict:
 		s = g["stamp"]
 		g["when"] = f"{s[6:8]}-{s[4:6]}-{s[0:4]} {s[9:11]}:{s[11:13]}"
 	total, used, free = shutil.disk_usage(get_bench_path())
-	jobs = frappe.get_all("ERP Backup Job", fields=["name", "job_type", "action", "status", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
+	jobs = frappe.get_all("SiteCare Job", fields=["name", "job_type", "action", "status", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
 		"db_file", "public_file", "private_file", "error", "status_token"], order_by="creation desc", limit=15)
 	for j in jobs:
 		j["by"] = frappe.utils.get_fullname(j.requested_by) if j.requested_by else ""
@@ -105,6 +117,7 @@ def overview() -> dict:
 		"backups": backups[:30],
 		"jobs": jobs,
 		"busy": _busy_job(),
+		"stats": _stats(backups),
 		"health": _health(),
 		"disk": {"free": _human(free), "free_bytes": free, "total": _human(total), "pct_used": round(used * 100 / total)},
 		"db_size": _human(frappe.db.sql("select sum(data_length + index_length) from information_schema.tables where table_schema=%s", frappe.conf.db_name)[0][0] or 0),
@@ -117,7 +130,7 @@ def job_status(job: str) -> dict:
 	state = runner.read_state(job)
 	if state:
 		return state
-	d = frappe.db.get_value("ERP Backup Job", job, ["name", "job_type", "status", "stage", "progress", "error", "log",
+	d = frappe.db.get_value("SiteCare Job", job, ["name", "job_type", "status", "stage", "progress", "error", "log",
 		"db_file", "public_file", "private_file", "config_file"], as_dict=True) or {}
 	return {"job": d.get("name"), "type": d.get("job_type"), "status": d.get("status"), "stage": d.get("stage"), "progress": d.get("progress"),
 		"error": d.get("error"), "log": d.get("log"), "outputs": {k: d.get(k + "_file") for k in ("db", "public", "private", "config")}} if d else {}
@@ -155,7 +168,7 @@ def download(file: str):
 
 
 def download_url(name):
-	return f"/api/method/adi_erp_backup.api.download?file={name}"
+	return f"/api/method/adisitecare.api.download?file={name}"
 
 
 # ---------------------------------------------------------------- backup
@@ -166,13 +179,13 @@ def start_backup(with_files: int | str = 0) -> dict:
 	_require()
 	if _busy_job():
 		frappe.throw(_("Another backup or restore is already running — wait for it to finish."))
-	doc = frappe.get_doc({"doctype": "ERP Backup Job", "job_type": "Backup", "status": "Queued", "stage": "Queued",
+	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Backup", "status": "Queued", "stage": "Queued",
 		"with_files": cint(with_files), "requested_by": frappe.session.user, "started_on": now_datetime()})
 	doc.insert(ignore_permissions=True)
 	runner.new_state(doc.name, "Backup", with_files=cint(with_files), user=frappe.session.user,
 		title=_("Backup with files") if cint(with_files) else _("Database backup"), steps=runner.make_steps(runner.BACKUP_STEPS))
 	frappe.db.commit()
-	frappe.enqueue("adi_erp_backup.runner.run_backup", queue="long", timeout=4 * 3600, job=doc.name, enqueue_after_commit=True)
+	frappe.enqueue("adisitecare.runner.run_backup", queue="long", timeout=4 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name}
 
 
@@ -207,7 +220,7 @@ def _check_start(data, filename, kind, total):
 	if name.endswith((".gz", ".tgz")) and data[:2] != b"\x1f\x8b":
 		if data.lstrip().startswith(b"-- begin frappe metadata") or data.lstrip().startswith(b"--"):
 			frappe.throw(_("This file is not really gzip — it was damaged when it was downloaded (the browser unpacked it and "
-				"kept only the first lines). Download the backup again with the adiERP Backup download button, then upload that file."),
+				"kept only the first lines). Download the backup again with the adiSiteCare download button, then upload that file."),
 				title=_("Damaged backup file"))
 		frappe.throw(_("{0} is not a valid gzip file.").format(filename), title=_("Damaged backup file"))
 	if kind == "db" and total == 1 and len(data) < 1024:
@@ -290,7 +303,7 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 	if free < need:
 		frappe.throw(_("Not enough disk space: {0} free, about {1} needed (restore + safety backup). Free some space first.").format(_human(free), _human(need)))
 
-	doc = frappe.get_doc({"doctype": "ERP Backup Job", "job_type": "Restore", "status": "Queued", "stage": "Queued",
+	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Restore", "status": "Queued", "stage": "Queued",
 		"with_files": 1 if (sources["public"] or sources["private"]) else 0, "restart_after": cint(restart),
 		"requested_by": frappe.session.user, "started_on": now_datetime(), "status_token": frappe.generate_hash(length=32),
 		"restore_db": os.path.basename(sources["db"]), "restore_public": os.path.basename(sources["public"] or "") or None,
@@ -302,7 +315,7 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 		user=frappe.session.user, with_files=doc.with_files, title=_("Restore {0}").format(os.path.basename(sources["db"])),
 		steps=runner.make_steps(steps))
 	frappe.db.commit()
-	frappe.enqueue("adi_erp_backup.runner.run_restore", queue="long", timeout=6 * 3600, job=doc.name, enqueue_after_commit=True)
+	frappe.enqueue("adisitecare.runner.run_restore", queue="long", timeout=6 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name, "token": doc.status_token}
 
 
@@ -318,13 +331,13 @@ def start_action(action: str) -> dict:
 	if _busy_job():
 		frappe.throw(_("Another job is already running — wait for it to finish."))
 	title, steps = runner.ACTIONS[action]
-	doc = frappe.get_doc({"doctype": "ERP Backup Job", "job_type": "Action", "action": title, "status": "Queued", "stage": "Queued",
+	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Action", "action": title, "status": "Queued", "stage": "Queued",
 		"requested_by": frappe.session.user, "started_on": now_datetime()})
 	doc.insert(ignore_permissions=True)
 	runner.new_state(doc.name, "Action", action=action, title=title, user=frappe.session.user,
 		steps=runner.make_steps([(k, label) for k, label, *_ in steps]))
 	frappe.db.commit()
-	frappe.enqueue("adi_erp_backup.runner.run_action", queue="long", timeout=2 * 3600, job=doc.name, enqueue_after_commit=True)
+	frappe.enqueue("adisitecare.runner.run_action", queue="long", timeout=2 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name}
 
 
@@ -338,7 +351,7 @@ def set_emails(muted: int | str, discard_pending: int | str = 0) -> dict:
 	discarded = 0
 	if not cint(muted) and cint(discard_pending):
 		discarded = frappe.db.count("Email Queue", {"status": "Not Sent"})
-		frappe.db.sql("""update `tabEmail Queue` set status='Error', error='Discarded by adiERP Backup before unmuting (staging copy)'
+		frappe.db.sql("""update `tabEmail Queue` set status='Error', error='Discarded by adiSiteCare before unmuting (staging copy)'
 			where status='Not Sent'""")
 		frappe.db.commit()
 	update_site_config("mute_emails", 1 if cint(muted) else 0)
