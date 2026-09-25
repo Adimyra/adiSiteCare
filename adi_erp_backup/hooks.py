@@ -256,3 +256,15 @@ app_license = "mit"
 # List of apps whose translatable strings should be excluded from this app's translations.
 # ignore_translatable_strings_from = []
 
+
+required_apps = ["frappe"]
+
+add_to_apps_screen = [
+	{
+		"name": "adi_erp_backup",
+		"logo": "/assets/frappe/images/frappe-framework-logo.svg",
+		"title": "adiERP Backup",
+		"route": "/app/adierp-backup",
+		"has_permission": "adi_erp_backup.api.has_app_permission",
+	}
+]

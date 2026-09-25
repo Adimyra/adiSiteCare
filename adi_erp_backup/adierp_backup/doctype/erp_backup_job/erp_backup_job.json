@@ -1,0 +1,214 @@
+{
+ "doctype": "DocType",
+ "name": "ERP Backup Job",
+ "module": "adiERP Backup",
+ "custom": 0,
+ "istable": 0,
+ "autoname": "ERPB-.YYYY.-.#####",
+ "naming_rule": "Expression",
+ "engine": "InnoDB",
+ "track_changes": 0,
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "title_field": "job_type",
+ "show_title_field_in_link": 0,
+ "field_order": [
+  "job_type",
+  "status",
+  "stage",
+  "progress",
+  "column_break_a",
+  "with_files",
+  "restart_after",
+  "requested_by",
+  "started_on",
+  "finished_on",
+  "section_output",
+  "db_file",
+  "public_file",
+  "private_file",
+  "config_file",
+  "section_restore",
+  "restore_db",
+  "restore_public",
+  "restore_private",
+  "safety_backup",
+  "section_log",
+  "error",
+  "log",
+  "status_token"
+ ],
+ "fields": [
+  {
+   "fieldname": "job_type",
+   "fieldtype": "Select",
+   "label": "Job Type",
+   "options": "Backup\nRestore",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Queued\nRunning\nSuccess\nFailed",
+   "default": "Queued",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "stage",
+   "fieldtype": "Data",
+   "label": "Stage",
+   "read_only": 1
+  },
+  {
+   "fieldname": "progress",
+   "fieldtype": "Percent",
+   "label": "Progress",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_a",
+   "fieldtype": "Column Break",
+   "label": ""
+  },
+  {
+   "fieldname": "with_files",
+   "fieldtype": "Check",
+   "label": "With Files (public + private)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "restart_after",
+   "fieldtype": "Check",
+   "label": "Restart After Restore",
+   "read_only": 1
+  },
+  {
+   "fieldname": "requested_by",
+   "fieldtype": "Link",
+   "label": "Requested By",
+   "options": "User",
+   "read_only": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "started_on",
+   "fieldtype": "Datetime",
+   "label": "Started On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "finished_on",
+   "fieldtype": "Datetime",
+   "label": "Finished On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_output",
+   "fieldtype": "Section Break",
+   "label": "Backup Files"
+  },
+  {
+   "fieldname": "db_file",
+   "fieldtype": "Data",
+   "label": "Database Backup",
+   "read_only": 1
+  },
+  {
+   "fieldname": "public_file",
+   "fieldtype": "Data",
+   "label": "Public Files Backup",
+   "read_only": 1
+  },
+  {
+   "fieldname": "private_file",
+   "fieldtype": "Data",
+   "label": "Private Files Backup",
+   "read_only": 1
+  },
+  {
+   "fieldname": "config_file",
+   "fieldtype": "Data",
+   "label": "Site Config Backup",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_restore",
+   "fieldtype": "Section Break",
+   "label": "Restore Source"
+  },
+  {
+   "fieldname": "restore_db",
+   "fieldtype": "Data",
+   "label": "Database File",
+   "read_only": 1
+  },
+  {
+   "fieldname": "restore_public",
+   "fieldtype": "Data",
+   "label": "Public Files",
+   "read_only": 1
+  },
+  {
+   "fieldname": "restore_private",
+   "fieldtype": "Data",
+   "label": "Private Files",
+   "read_only": 1
+  },
+  {
+   "fieldname": "safety_backup",
+   "fieldtype": "Small Text",
+   "label": "Safety Backup (taken before restore)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_log",
+   "fieldtype": "Section Break",
+   "label": "Log"
+  },
+  {
+   "fieldname": "error",
+   "fieldtype": "Small Text",
+   "label": "Error",
+   "read_only": 1
+  },
+  {
+   "fieldname": "log",
+   "fieldtype": "Code",
+   "label": "Log",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status_token",
+   "fieldtype": "Data",
+   "label": "Status Token",
+   "hidden": 1,
+   "read_only": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1,
+   "delete": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 0,
+   "write": 0,
+   "create": 0
+  }
+ ],
+ "in_create": 1,
+ "read_only": 0,
+ "description": "Backups and restores run from the adiERP Backup page.",
+ "modified": "2026-09-26 00:40:00.000000",
+ "modified_by": "Administrator",
+ "owner": "Administrator",
+ "creation": "2026-09-26 10:00:00.000000"
+}

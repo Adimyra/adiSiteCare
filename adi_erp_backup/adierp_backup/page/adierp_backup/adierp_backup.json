@@ -1,0 +1,19 @@
+{
+ "doctype": "Page",
+ "name": "adierp-backup",
+ "page_name": "adierp-backup",
+ "title": "adiERP Backup",
+ "module": "adiERP Backup",
+ "standard": "Yes",
+ "system_page": 0,
+ "icon": "",
+ "roles": [
+  {
+   "role": "System Manager"
+  }
+ ],
+ "modified": "2026-09-26 10:00:00.000000",
+ "modified_by": "Administrator",
+ "owner": "Administrator",
+ "creation": "2026-09-26 10:00:00.000000"
+}
