@@ -376,7 +376,9 @@ class adiSiteCarePage {
 				<div class="ae-hist-b">
 					<div><a href="/app/sitecare-job/${esc(j.name)}"><b>${esc(j.action || j.job_type)}${j.job_type === "Backup" && j.with_files ? " · " + __("with files") : ""}</b></a>
 						<span class="ae-pill ${tone(j.status)}">${esc(j.status)}</span></div>
-					<small>${esc(j.name)} · ${esc(j.by)} · ${frappe.datetime.prettyDate(j.creation)}${j.error ? ` · <span class="t-bad">${esc(j.error.slice(0, 90))}</span>` : ""}</small>
+					<small>${esc(j.name)} · ${esc(j.by)} · ${esc(frappe.datetime.str_to_user(j.creation))} (${frappe.datetime.prettyDate(j.creation)})</small>
+					${this.howHtml(j)}
+					${j.error ? `<small class="t-bad">${esc(j.error.slice(0, 140))}</small>` : ""}
 				</div>
 				${j.db_file ? `<a class="btn btn-default btn-xs" href="${dl(j.db_file)}">${ic("down", 13)} ${__("Database")}</a>` : ""}
 				<button class="btn btn-default btn-xs hs-log" data-job="${esc(j.name)}" data-token="${esc(j.job_type === "Restore" && (j.status === "Queued" || j.status === "Running") ? j.status_token || "" : "")}">${j.status === "Queued" || j.status === "Running" ? __("Show progress") : __("View log")}</button>
@@ -387,6 +389,15 @@ class adiSiteCarePage {
 			this.watch($b.data("job"), $b.data("token") || undefined);
 			$("html,body").animate({ scrollTop: this.$root.find(".ae-job").offset().top - 70 }, 200);
 		});
+	}
+
+	howHtml(j) {
+		const files = (arr) => arr.filter(Boolean).map((f) => `<code>${esc(f)}</code>`).join(" ");
+		if (j.job_type === "Restore" && j.restore_db)
+			return `<small class="ae-how">${__("Restored from")} ${files([j.restore_db, j.restore_public, j.restore_private])}</small>`;
+		if (j.job_type === "Backup" && j.db_file)
+			return `<small class="ae-how">${__("Created")} ${files([j.db_file, j.public_file, j.private_file])}</small>`;
+		return "";
 	}
 
 	// ============================================================ live job: checklist + terminal
@@ -569,7 +580,7 @@ class adiSiteCarePage {
 .ae-tool-b{flex:1;display:flex;flex-direction:column;gap:3px}.ae-tool-b b{font-size:13.5px}.ae-tool-b small{color:var(--text-muted);font-size:12px}.ae-tool-b small.ae-tool-note{color:var(--ae-warn)}
 .ae-hist-ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none}
 .ae-hist-ic.ok{background:var(--ae-ok-bg);color:var(--ae-ok)}.ae-hist-ic.bad{background:var(--ae-bad-bg);color:var(--ae-bad)}.ae-hist-ic.run{background:rgba(77,100,67,.14);color:var(--ae-accent)}.ae-hist-ic.mute{background:var(--control-bg);color:var(--text-muted)}
-.ae-hist-b{flex:1;min-width:200px;display:flex;flex-direction:column;gap:2px}.ae-hist-b>div{display:flex;gap:8px;align-items:center}.ae-hist-b small{color:var(--text-muted);font-size:12px}
+.ae-hist-b{flex:1;min-width:200px;display:flex;flex-direction:column;gap:2px}.ae-hist-b>div{display:flex;gap:8px;align-items:center}.ae-hist-b small{color:var(--text-muted);font-size:12px}.ae-how code{font-size:11px;padding:0 5px}
 .ae-jobcard{display:flex;flex-direction:column;gap:12px;border-width:1.5px}.ae-jobcard.run{border-color:rgba(77,100,67,.45);animation:ae-glow 2.4s ease-in-out infinite}@keyframes ae-glow{50%{box-shadow:0 0 0 4px rgba(143,194,122,.12),0 10px 30px -12px rgba(77,100,67,.5)}}.ae-jobcard.ok{border-color:rgba(22,163,74,.35)}.ae-jobcard.bad{border-color:rgba(220,38,38,.35)}
 .ae-job-head{display:flex;align-items:center;gap:14px}.ae-job-t{flex:1;min-width:0}.ae-job-t h3{margin:6px 0 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ae-job-t small{color:var(--text-muted);font-size:12px}
 .ae-job-pct{font-size:30px;font-weight:700;letter-spacing:-.03em;font-variant-numeric:tabular-nums}.ae-job-pct small{font-size:15px;color:var(--text-muted)}

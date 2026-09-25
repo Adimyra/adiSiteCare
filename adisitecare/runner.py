@@ -239,6 +239,36 @@ def _reconnect():
 	frappe.connect(frappe.local.site)
 
 
+def _snapshot_history():
+	"""The job history lives in the database a restore replaces — keep a copy in memory to put back afterwards."""
+	try:
+		return frappe.get_all("SiteCare Job", fields=["*"], order_by="creation asc")
+	except Exception:
+		return []
+
+
+def _restore_history(rows):
+	"""Put back history records the restored backup didn't have (e.g. jobs run after that backup was taken)."""
+	added = 0
+	try:
+		if not rows or not frappe.db.table_exists("SiteCare Job"):
+			return 0
+		columns = set(frappe.db.get_table_columns("SiteCare Job"))
+		for row in rows:
+			if frappe.db.exists("SiteCare Job", row["name"]):
+				continue
+			doc = frappe.get_doc({"doctype": "SiteCare Job", **{k: v for k, v in row.items() if k in columns}})
+			doc.name = row["name"]
+			doc.flags.name_set = True
+			doc.db_insert()
+			fix_series(row["name"])
+			added += 1
+		frappe.db.commit()
+	except Exception:
+		frappe.db.rollback()
+	return added
+
+
 def _reconcile(job):
 	"""A restored database brings back job records as they were at backup time — close the ones still 'running'."""
 	try:
@@ -424,6 +454,7 @@ def run_restore(job):
 			run(state, _frappe_cmd("set-config", "mute_emails", "1"), "Muting outgoing emails (staging copy)", 32, 33, 10)
 
 		set_step(state, "restore")
+		history = _snapshot_history()
 		# 4. restore — with the site's own database user, so no MariaDB root password is needed
 		args = ["sitecare-restore-db", db]
 		if src.get("public"):
@@ -464,7 +495,10 @@ def run_restore(job):
 		state.update(status="Success", stage="Restore complete", progress=100, finished=str(now_datetime()))
 		write_state(state)
 		_reconnect()
+		kept = _restore_history(history)
 		_reconcile(job)
+		if kept:
+			log(state, f"✓ Job history kept — {kept} record(s) newer than the backup put back.")
 		save_record(state, {"safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
 			"restore_public": os.path.basename(src.get("public") or "") or None, "restore_private": os.path.basename(src.get("private") or "") or None})
 
@@ -493,6 +527,7 @@ def run_restore(job):
 		write_state(state)
 		try:
 			_reconnect()
+			_restore_history(locals().get("history"))
 			_reconcile(job)
 		except Exception:
 			pass

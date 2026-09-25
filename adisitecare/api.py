@@ -107,7 +107,7 @@ def overview() -> dict:
 		g["when"] = f"{s[6:8]}-{s[4:6]}-{s[0:4]} {s[9:11]}:{s[11:13]}"
 	total, used, free = shutil.disk_usage(get_bench_path())
 	jobs = frappe.get_all("SiteCare Job", fields=["name", "job_type", "action", "status", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
-		"db_file", "public_file", "private_file", "error", "status_token"], order_by="creation desc", limit=15)
+		"db_file", "public_file", "private_file", "error", "status_token", "restore_db", "restore_public", "restore_private", "started_on"], order_by="creation desc", limit=15)
 	for j in jobs:
 		j["by"] = frappe.utils.get_fullname(j.requested_by) if j.requested_by else ""
 	return {
