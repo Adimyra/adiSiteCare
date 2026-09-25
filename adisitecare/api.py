@@ -88,6 +88,7 @@ def _health():
 		"dev_mode": bool(cint(frappe.get_conf().get("developer_mode"))),
 		"supervisor": bool(shutil.which("supervisorctl")),
 		"bench_start": bool(_honcho_pid()),
+		"staging_banner": _banner_on(),
 		"os_user": _os_user(),
 	}
 
@@ -413,6 +414,48 @@ def _os_user():
 		return getpass.getuser()
 	except Exception:
 		return ""
+
+
+def _banner_on():
+	try:
+		from adisitecare import banner
+
+		return banner.is_on()
+	except Exception:
+		return False
+
+
+@frappe.whitelist()
+def staging_banner_info() -> dict:
+	"""Default date for the banner: when the last restored backup was taken."""
+	_require()
+	from adisitecare import banner
+
+	info = banner.last_restore() or {}
+	return {**info, "on": banner.is_on(), "label": banner.label(info["when"]) if info.get("when") else ""}
+
+
+@frappe.whitelist()
+def staging_banner_preview(when: str) -> dict:
+	_require()
+	from adisitecare import banner
+
+	return {"html": banner.html(when), "label": banner.label(when)}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_staging_banner(on: int | str, when: str | None = None) -> dict:
+	"""Show / remove the staging banner above the website navbar (Website Settings → Banner HTML)."""
+	_require()
+	from adisitecare import banner
+
+	if cint(on):
+		if not when:
+			frappe.throw(_("Choose the backup date and time."))
+		banner.apply(when)
+	else:
+		banner.remove()
+	return {"health": _health()}
 
 
 def _honcho_pid():

@@ -513,6 +513,12 @@ def run_restore(job):
 			if path:
 				os.utime(path)
 		log(state, "✓ Backup files look good.")
+		from adisitecare import banner
+
+		taken = banner.backup_time(db)
+		state["backup_taken_on"] = str(taken) if taken else None
+		if taken:
+			log(state, f"✓ This backup was taken on {banner.label(taken)}")
 
 		set_step(state, "safety")
 		# 2. safety backup of the site as it is now — the undo point (lands in private/backups too)
@@ -580,7 +586,13 @@ def run_restore(job):
 		_reconcile(state["job"])
 		if kept:
 			log(state, f"✓ Job history kept — {kept} record(s) newer than the backup put back.")
-		save_record(state, {"safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
+		if staging:
+			try:
+				banner.apply(state.get("backup_taken_on") or now_datetime())
+				log(state, "✓ Staging banner shown on the website (Website Settings → Banner HTML).")
+			except Exception as e:
+				log(state, f"⚠ Couldn't set the staging banner ({e}) — set it from Tools.")
+		save_record(state, {"backup_taken_on": state.get("backup_taken_on"), "safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
 			"restore_public": os.path.basename(src.get("public") or "") or None, "restore_private": os.path.basename(src.get("private") or "") or None})
 
 		# 8. optional restart — last and detached; skipped (never asks a password) when the server isn't set up for it

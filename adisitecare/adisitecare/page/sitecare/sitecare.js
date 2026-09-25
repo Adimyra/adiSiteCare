@@ -100,6 +100,7 @@ class adiSiteCarePage {
 				${chip(!h.scheduler_paused, "clock", __("Scheduler"), h.scheduler_disabled ? __("Disabled") : h.scheduler_paused ? __("Paused") : __("Running"), "scheduler", null, h.scheduler_paused ? __("Resume") : __("Pause"))}
 				${chip(!h.emails_muted, "mail", __("Emails"), h.emails_muted ? __("Muted") : __("Sending"), h.emails_muted_bench ? null : "emails", null, h.emails_muted ? __("Unmute") : __("Mute"))}
 				${chip(h.workers !== 0, "cpu", __("Workers"), h.workers == null ? "—" : h.workers, null, "bad")}
+				${chip(true, "alert", __("Staging banner"), h.staging_banner ? __("On") : __("Off"), "banner", null, h.staging_banner ? __("Edit") : __("Show"))}
 			</div>
 			${h.workers === 0 ? `<div class="ae-note bad">${ic("alert", 15)}<span>${__("No background worker is running — jobs will wait in the queue. Start one with")} <code>bench worker</code> ${__("(supervisor does this in production).")}</span></div>` : ""}
 			${low ? `<div class="ae-note warn">${ic("alert", 15)}<span>${__("Low disk space — a backup or restore needs room for the files, a safety backup and the database.")}</span></div>` : ""}
@@ -210,7 +211,7 @@ class adiSiteCarePage {
 				</div></div>
 				<div class="ae-sec"><div class="ae-sec-n">2</div><div class="ae-sec-b">
 					<h4>${__("Options")}</h4>
-					<label class="ae-check"><input type="checkbox" class="rs-staging"><span><b>${__("This is a staging / test copy")}</b><small>${__("Emails stay muted and the scheduler stays paused, so production data here never emails real customers. Switch them on later in Tools.")}</small></span></label>
+					<label class="ae-check"><input type="checkbox" class="rs-staging"><span><b>${__("This is a staging / test copy")}</b><small>${__("Emails stay muted, the scheduler stays paused, and a STAGING SITE banner (with the backup's date and time) is shown on the website — so production data here never emails or charges real customers. Change any of it later in Tools.")}</small></span></label>
 					<label class="ae-check ${d.health.restart_available ? "" : "dim"}"><input type="checkbox" class="rs-restart" ${d.health.restart_available ? "" : "disabled"}><span><b>${__("Restart bench at the end")}</b><small>${d.health.restart_available ? __("Usually not needed — you can also do it later from Tools.") : __("Not possible on this server without a password — run it later from Tools (After-restore tasks) or the terminal if needed.")}</small></span></label>
 				</div></div>
 				<div class="ae-sec"><div class="ae-sec-n">3</div><div class="ae-sec-b">
@@ -337,6 +338,15 @@ class adiSiteCarePage {
 						<small>${__("Everyone — you included — sees the maintenance page while it's on, so it runs for a set time and switches off by itself.")}</small></div>
 					<button class="btn btn-sm btn-default mm-on" ${d.busy ? "disabled" : ""}>${__("Turn on…")}</button>
 				</div>
+				<div class="ae-switch">
+					<div class="ae-switch-ic ${h.staging_banner ? "warn" : "ok"}">${ic("alert", 20)}</div>
+					<div class="ae-switch-b"><b>${__("Staging banner on the website")} · <span class="${h.staging_banner ? "t-warn" : "t-ok"}">${h.staging_banner ? __("On") : __("Off")}</span></b>
+						<small>${__("A \"STAGING SITE — do not place orders or make payments\" notice above the website navbar, with the date and time of the restored database backup. Uses Website Settings → Banner HTML; other banner content is kept.")}</small></div>
+					<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+						<button class="btn btn-sm ${h.staging_banner ? "btn-default" : "btn-primary"} bn-edit">${h.staging_banner ? __("Update…") : __("Show banner…")}</button>
+						${h.staging_banner ? `<button class="btn btn-sm btn-default bn-off">${__("Remove")}</button>` : ""}
+					</div>
+				</div>
 			</div>
 			<div class="ae-card">
 				<div class="ae-card-head"><div><h3>${__("Run a command")}</h3><p>${__("Runs in the background with the live terminal — same as typing it on the server.")}</p></div></div>
@@ -361,6 +371,8 @@ class adiSiteCarePage {
 		body.find(".em-toggle").on("click", () => this.switchAction("emails"));
 		body.find(".sc-toggle").on("click", () => this.switchAction("scheduler"));
 		body.find(".mm-on").on("click", () => this.switchAction("maintenance"));
+		body.find(".bn-edit").on("click", () => this.switchAction("banner"));
+		body.find(".bn-off").on("click", () => frappe.confirm(__("Remove the staging banner from the website?"), () => this.setBanner(0)));
 	}
 
 	restart() {
@@ -463,6 +475,7 @@ class adiSiteCarePage {
 				this.render();
 			});
 		}
+		if (sw === "banner") return this.bannerDialog();
 		if (sw === "maintenance") {
 			if (h.maintenance) return;
 			if (this.data.busy) return frappe.msgprint(__("Another job is running — wait for it to finish."));
@@ -482,6 +495,40 @@ class adiSiteCarePage {
 			d.get_primary_btn().removeClass("btn-primary").addClass("btn-danger");
 			return d.show();
 		}
+	}
+
+	async bannerDialog() {
+		const info = (await frappe.call({ method: API + "staging_banner_info" })).message || {};
+		const srcText = !info.job ? __("No restore on this site yet — pick the date and time of the database backup.")
+			: info.source === "backup" ? __("From the restored backup itself ({0}) — the time the database dump was taken.", [info.file || info.job])
+			: __("The backup file has no time in it — using the time of restore {0}.", [info.job]);
+		const d = new frappe.ui.Dialog({
+			title: __("Staging banner"),
+			size: "large",
+			fields: [
+				{ fieldname: "when", fieldtype: "Datetime", label: __("Database backup: updated till"), reqd: 1, default: info.when || frappe.datetime.now_datetime(), description: srcText },
+				{ fieldname: "preview", fieldtype: "HTML" },
+			],
+			primary_action_label: info.on ? __("Update banner") : __("Show on website"),
+			primary_action: async (v) => { d.hide(); await this.setBanner(1, v.when); },
+		});
+		const preview = async () => {
+			const when = d.get_value("when");
+			if (!when) return;
+			const r = await frappe.call({ method: API + "staging_banner_preview", args: { when } });
+			d.fields_dict.preview.$wrapper.html(`<div class="text-muted small" style="margin:4px 0 6px">${__("Preview — shown above the website navbar")}</div>
+				<div style="border:1px solid var(--border-color);border-radius:10px;overflow:hidden">${r.message.html}</div>`);
+		};
+		d.fields_dict.when.df.onchange = preview;
+		d.show();
+		preview();
+	}
+
+	async setBanner(on, when) {
+		const r = await frappe.call({ method: API + "set_staging_banner", args: { on, when }, freeze: true });
+		frappe.show_alert({ message: on ? __("Staging banner is on the website") : __("Staging banner removed"), indicator: "green" });
+		this.data.health = r.message.health;
+		this.render();
 	}
 
 	async setEmails(muted, discard) {

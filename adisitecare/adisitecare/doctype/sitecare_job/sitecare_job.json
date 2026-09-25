@@ -31,6 +31,7 @@
   "config_file",
   "section_restore",
   "restore_db",
+  "backup_taken_on",
   "restore_public",
   "restore_private",
   "safety_backup",
@@ -156,6 +157,14 @@
    "read_only": 1
   },
   {
+   "fieldname": "backup_taken_on",
+   "fieldtype": "Datetime",
+   "label": "Backup Taken On",
+   "read_only": 1,
+   "description": "When the restored backup was taken (from the dump itself)",
+   "depends_on": "eval:doc.job_type=='Restore'"
+  },
+  {
    "fieldname": "restore_public",
    "fieldtype": "Data",
    "label": "Public Files",
@@ -215,7 +224,7 @@
  "in_create": 1,
  "read_only": 0,
  "description": "Backups and restores run from adiSiteCare.",
- "modified": "2026-09-26 02:30:00.000000",
+ "modified": "2026-09-26 03:30:00.000000",
  "modified_by": "Administrator",
  "owner": "Administrator",
  "creation": "2026-09-26 10:00:00.000000"
