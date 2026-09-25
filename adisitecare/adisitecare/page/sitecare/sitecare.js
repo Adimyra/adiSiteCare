@@ -504,7 +504,7 @@ class adiSiteCarePage {
 			: __("The backup file has no time in it — using the time of restore {0}.", [info.job]);
 		const d = new frappe.ui.Dialog({
 			title: __("Staging banner"),
-			size: "large",
+			size: "extra-large",
 			fields: [
 				{ fieldname: "when", fieldtype: "Datetime", label: __("Database backup: updated till"), reqd: 1, default: info.when || frappe.datetime.now_datetime(), description: srcText },
 				{ fieldname: "preview", fieldtype: "HTML" },
@@ -516,8 +516,25 @@ class adiSiteCarePage {
 			const when = d.get_value("when");
 			if (!when) return;
 			const r = await frappe.call({ method: API + "staging_banner_preview", args: { when } });
-			d.fields_dict.preview.$wrapper.html(`<div class="text-muted small" style="margin:4px 0 6px">${__("Preview — shown above the website navbar")}</div>
-				<div style="border:1px solid var(--border-color);border-radius:10px;overflow:hidden">${r.message.html}</div>`);
+			// render at real desktop width (1280px) and scale it down, so it looks exactly like the website
+			const $w = d.fields_dict.preview.$wrapper.html(`<div class="text-muted small" style="margin:4px 0 6px">${__("Preview — how it looks above the website navbar (desktop)")}</div>
+				<div class="sc-prev-box" style="border:1px solid var(--border-color);border-radius:10px;overflow:hidden;position:relative;background:#0c1a15">
+					<div class="sc-prev-inner" style="width:1280px;transform-origin:0 0">${r.message.html}
+						<div style="height:44px;background:#0f1f19;display:flex;align-items:center;gap:26px;padding:0 28px;color:#cbd5c9;font:14px system-ui">
+							<b style="color:#fff">${esc(this.data.site)}</b><span>Home</span><span>Products</span><span>About</span><span>Contact</span></div>
+					</div></div>`);
+			const fit = (tries = 0) => {
+				const box = $w.find(".sc-prev-box")[0], inner = $w.find(".sc-prev-inner")[0];
+				if (!box || !inner) return;
+				if (!box.clientWidth || !inner.offsetHeight) {  // dialog still opening — measure again
+					if (tries < 40) setTimeout(() => fit(tries + 1), 50);
+					return;
+				}
+				const k = box.clientWidth / 1280;
+				inner.style.transform = `scale(${k})`;
+				box.style.height = Math.ceil(inner.offsetHeight * k) + "px";
+			};
+			fit();
 		};
 		d.fields_dict.when.df.onchange = preview;
 		d.show();

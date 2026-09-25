@@ -44,13 +44,17 @@ TEMPLATE = """<style>
         <span class="sc-msg-long"> — please don't place orders or make payments. Nothing here is processed.</span>
         <span class="sc-msg-short"> — no orders or payments.</span>
     </span>
-    <span style="display: inline-flex; align-items: center; gap: 7px; background: rgba(255,255,255,.75);
-        border: 1px solid #fecdd3; border-radius: 999px; padding: 3px 11px; font-size: 12px; color: #6b7280;
-        box-shadow: 0 1px 2px rgba(127,29,29,.06);">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2.2" stroke-linecap="round"
-            stroke-linejoin="round" style="flex: none;"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-        <span>Data as of</span>
-        <span style="color: #7f1d1d;">{date}</span>
+    <span style="display: inline-flex; align-items: center; gap: 8px; background: #ffffff;
+        border: 1px solid #fecdd3; border-radius: 999px; padding: 3px 12px 3px 4px; font-size: 12px; color: #6b7280;
+        box-shadow: 0 1px 3px rgba(127,29,29,.08);">
+        <span style="display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px;
+            border-radius: 50%; background: #fee2e2; flex: none;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#b91c1c" stroke-width="2.3" stroke-linecap="round"
+                stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg>
+        </span>
+        <span style="color: #7f1d1d; font-weight: 600;">Database backup</span>
+        <span style="width: 1px; height: 12px; background: #fecdd3;"></span>
+        <span style="color: #6b7280;">{date}</span>
         <span style="width: 3px; height: 3px; border-radius: 50%; background: #fca5a5;"></span>
         <strong style="color: #b91c1c; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em;">{time}</strong>
     </span>
