@@ -641,14 +641,14 @@ def run_restore(job):
 			update_site_config("encryption_key", key_from_backup, site_config_path=frappe.get_site_path("site_config.json"))
 			log(state, "✓ Encryption key taken from the backup's site config (saved passwords in the backup keep working).")
 
-		# 5. keep this tool on the site even if the backup is from before it was installed
+		set_step(state, "migrate")
+		# 5. migrate first — it brings a backup from an older Frappe up to this bench's version
+		run(state, _frappe_cmd("migrate"), "Migrating", 70, 88, expect_seconds=300)
+
+		# 6. keep this tool on the site even if the backup is from before it was installed
 		apps = subprocess.run(_frappe_cmd("list-apps"), cwd=os.path.join(get_bench_path(), "sites"), capture_output=True, text=True).stdout
 		if APP not in apps:
-			run(state, _frappe_cmd("install-app", APP), "Re-installing adiSiteCare", 70, 74, 60)
-
-		set_step(state, "migrate")
-		# 6. migrate + caches
-		run(state, _frappe_cmd("migrate"), "Migrating", 74, 92, expect_seconds=300)
+			run(state, _frappe_cmd("install-app", APP), "Re-installing adiSiteCare", 88, 92, 60)
 		run(state, _frappe_cmd("clear-cache"), "Clearing cache", 92, 94, 20)
 		run(state, _frappe_cmd("clear-website-cache"), "Clearing website cache", 94, 95, 20)
 

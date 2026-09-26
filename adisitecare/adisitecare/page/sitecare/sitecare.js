@@ -525,6 +525,22 @@ class adiSiteCarePage {
 		this._rp = setInterval(tick, 2000);
 	}
 
+	async waitOnline() {
+		const t0 = Date.now();
+		let shown = false;
+		while (Date.now() - t0 < 180000) {
+			try {
+				const r = await fetch("/api/method/ping", { cache: "no-store" });
+				if (r.ok) { if (shown) frappe.show_alert({ message: __("Site is back online"), indicator: "green" }); return; }
+			} catch (e) { /* restarting */ }
+			if (!shown && Date.now() - t0 > 3000) {
+				shown = true;
+				frappe.show_alert({ message: __("Waiting for the site to come back online (Frappe refreshes its settings within a minute)…"), indicator: "blue" }, 15);
+			}
+			await new Promise((r) => setTimeout(r, 3000));
+		}
+	}
+
 	restartHint() {
 		return this.data && this.data.health.dev_mode
 			? __("Development bench (bench start): press Ctrl+C in that terminal and run bench start again.")
@@ -699,7 +715,9 @@ class adiSiteCarePage {
 			if (["Success", "Failed", "Interrupted"].includes(st.status)) {
 				clearInterval(this._poll);
 				this.watching = null;
-				setTimeout(() => this.load(), st.restarted ? 8000 : 400);
+				// after maintenance mode, Frappe keeps serving "Updating" for up to a minute (settings cache) — wait for it
+				if (token || st.restarted) this.waitOnline().then(() => this.load());
+				else setTimeout(() => this.load(), 400);
 			}
 		};
 		tick();
