@@ -8,7 +8,7 @@ frappe.pages["sitecare"].on_page_show = function (wrapper) {
 };
 
 const API = "adisitecare.api.";
-const CHUNK = 5 * 1024 * 1024;
+const CHUNK = 4 * 1024 * 1024;
 const esc = (s) => frappe.utils.escape_html(s == null ? "" : String(s));
 const dl = (f) => `/api/method/adisitecare.api.download?file=${encodeURIComponent(f)}`;
 const human = (n) => { n = +n || 0; for (const u of ["B", "KB", "MB", "GB", "TB"]) { if (n < 1024) return u === "B" ? `${n} B` : `${n.toFixed(1)} ${u}`; n /= 1024; } return `${n.toFixed(1)} PB`; };
@@ -242,33 +242,65 @@ class adiSiteCarePage {
 	}
 
 	async uploadFile(file, kind, stamp, $drop) {
+		// Sends the file in pieces at exact byte positions. Each piece is retried on network errors,
+		// timeouts and 5xx; on 413 (too large for the server/proxy) the piece size is halved.
 		const id = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-		const total = Math.max(1, Math.ceil(file.size / CHUNK));
 		const $bar = $drop.find(".ae-drop-bar span"), $fn = $drop.find(".fn");
-		$drop.addClass("busy");
-		let ref = null;
-		for (let i = 0; i < total; i++) {
+		const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+		let chunk = CHUNK, offset = 0, ref = null, retries = 0;
+		$drop.removeClass("done err").addClass("busy");
+		const fail = (msg) => { $drop.removeClass("busy").addClass("err"); $fn.text(msg); throw new Error(msg); };
+		while (offset < file.size || (file.size === 0 && !ref)) {
+			const piece = file.slice(offset, offset + chunk);
 			const fd = new FormData();
 			fd.append("upload_id", id); fd.append("kind", kind); fd.append("filename", file.name); fd.append("stamp", stamp);
-			fd.append("index", i); fd.append("total", total);
-			fd.append("chunk", file.slice(i * CHUNK, (i + 1) * CHUNK), file.name);
-			const res = await fetch("/api/method/" + API + "upload_chunk", { method: "POST", body: fd, headers: { "X-Frappe-CSRF-Token": frappe.csrf_token } });
-			const j = await res.json().catch(() => ({}));
-			if (!res.ok) {
-				$drop.removeClass("busy").addClass("err");
-				let msg = __("Upload failed");
-				try { msg = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { /* keep default */ }
-				$fn.text(msg);
-				throw new Error(msg);
+			fd.append("offset", offset); fd.append("size", file.size);
+			fd.append("chunk", piece, file.name);
+			let res = null, j = {}, netErr = null;
+			try {
+				res = await fetch("/api/method/" + API + "upload_chunk", { method: "POST", body: fd, headers: { "X-Frappe-CSRF-Token": frappe.csrf_token } });
+				j = await res.json().catch(() => ({}));
+			} catch (e) { netErr = e; }
+			if (!netErr && res.ok) {
+				offset = (j.message && j.message.received) || offset + piece.size;
+				ref = j.message && j.message.ref;
+				retries = 0;
+				const pct = file.size ? Math.round((offset / file.size) * 100) : 100;
+				$bar.css("width", pct + "%");
+				$fn.text(`${__("Uploading")} ${file.name} · ${pct}% · ${human(offset)} / ${human(file.size)}`);
+				if (j.message && j.message.done) break;
+				continue;
 			}
-			const pct = Math.round(((i + 1) / total) * 100);
-			$bar.css("width", pct + "%");
-			$fn.text(`${__("Uploading")} ${file.name} · ${pct}%`);
-			ref = j.message.ref;
+			const status = res ? res.status : 0;
+			if (status === 413 && chunk > 512 * 1024) {  // server / proxy limit — smaller pieces
+				chunk = Math.max(512 * 1024, Math.floor(chunk / 2));
+				$fn.text(`${__("Server limit — sending smaller pieces")} (${human(chunk)})…`);
+				continue;
+			}
+			if ((netErr || status === 429 || status >= 500) && retries < 5) {
+				retries += 1;
+				$fn.text(`${__("Connection problem — retrying")} (${retries}/5)…`);
+				await wait(1000 * 2 ** retries);
+				continue;
+			}
+			fail(this.uploadError(file, status, j, netErr));
 		}
 		$drop.removeClass("busy").addClass("done");
 		$fn.text(`✓ ${file.name} · ${human(file.size)} · ${__("saved to backups")}`);
 		return ref;
+	}
+
+	uploadError(file, status, j, netErr) {
+		let server = "";
+		try { server = JSON.parse(JSON.parse(j._server_messages)[0]).message; } catch (e) { /* none */ }
+		server = server || j.exc_type || (j.exception || "").split("\n")[0] || "";
+		const why = netErr ? __("the connection dropped (network, VPN or proxy)")
+			: status === 413 ? __("the server refused the size — raise client_max_body_size (nginx) or max_file_size (site config)")
+			: status === 403 || /CSRF/i.test(server) ? __("your session expired — reload the page and sign in again")
+			: status === 502 || status === 504 ? __("the server timed out — try again, or copy the file to the server and use 'Backup on this server'")
+			: status >= 500 ? __("server error — see Error Log on the server")
+			: "";
+		return `${__("Upload of {0} failed", [file.name])}${status ? ` (HTTP ${status})` : ""}${why ? ": " + why : ""}${server ? ` — ${$("<div>").html(server).text()}` : ""}`;
 	}
 
 	async startRestore(body) {

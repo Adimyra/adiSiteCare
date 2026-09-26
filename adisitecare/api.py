@@ -240,9 +240,12 @@ def _check_start(data, filename, kind, total):
 
 
 @frappe.whitelist(methods=["POST"])
-def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, total: int | str, stamp: str) -> dict:
-	"""Receive one piece of a backup file. Pieces arrive in order and are appended to a
-	hidden .part file in private/backups, renamed to the final name after the last piece."""
+def upload_chunk(upload_id: str, kind: str, filename: str, offset: int | str, size: int | str, stamp: str) -> dict:
+	"""Receive one piece of a backup file at an exact byte position.
+
+	Safe to repeat: a retried piece (e.g. after a timeout where the first attempt did arrive)
+	is written at the same offset again instead of being appended twice. The file is renamed
+	to its final name in private/backups once all `size` bytes are there."""
 	_require()
 	if kind not in KIND_SUFFIX or not re.fullmatch(r"[a-z0-9]{8,40}", upload_id or "") or not re.fullmatch(r"\d{8}_\d{6}", stamp or ""):
 		frappe.throw(_("Invalid upload"))
@@ -253,27 +256,36 @@ def upload_chunk(upload_id: str, kind: str, filename: str, index: int | str, tot
 	data = chunk.stream.read(CHUNK_LIMIT + 1)
 	if len(data) > CHUNK_LIMIT:
 		frappe.throw(_("Chunk too large"))
-	if cint(index) == 0:
-		_check_start(data, filename, kind, cint(total))
+	offset, size = cint(offset), cint(size)
+	if offset == 0:
+		_check_start(data, filename, kind, 1 if len(data) >= size else 2)
 	d = _backups_dir()
 	os.makedirs(d, exist_ok=True)
 	part = os.path.join(d, f".upload-{upload_id}.part")
-	index = cint(index)
-	with open(part, "wb" if index == 0 else "ab") as f:
+	have = os.path.getsize(part) if os.path.exists(part) else 0
+	if offset > have:
+		frappe.throw(_("A piece of the upload is missing — start the upload again."), title=_("Upload interrupted"))
+	with open(part, "r+b" if os.path.exists(part) else "wb") as f:
+		f.seek(offset)
 		f.write(data)
-	if index + 1 < cint(total):
-		return {"ref": None, "done": False}
+		f.truncate(offset + len(data))  # a repeated piece replaces, never duplicates
+	received = os.path.getsize(part)
+	if received < size:
+		return {"ref": None, "done": False, "received": received}
+	if received > size:
+		os.remove(part)
+		frappe.throw(_("The upload has more data than the file — start the upload again."), title=_("Upload interrupted"))
 	final = _upload_name(filename, kind, stamp)
 	dest = os.path.join(d, final)
 	if os.path.exists(dest):
-		if os.path.getsize(dest) == os.path.getsize(part):
+		if os.path.getsize(dest) == received:
 			os.remove(part)  # same file uploaded again — use the one that's there
 		else:
 			os.remove(part)
 			frappe.throw(_("A different file named {0} is already in the backups folder.").format(final))
 	else:
 		os.replace(part, dest)
-	return {"ref": final, "done": True, "size": _human(os.path.getsize(dest))}
+	return {"ref": final, "done": True, "received": received, "size": _human(received)}
 
 
 def _resolve(ref, kind):
