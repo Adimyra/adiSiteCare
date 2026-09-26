@@ -146,6 +146,7 @@ def _drive_download(state, kind, file_id, start, end):
 RESTORE_STEPS = [("check", "Check the backup files"), ("safety", "Safety backup"), ("maintenance", "Maintenance mode on"),
 	("restore", "Restore database & files"), ("migrate", "Migrate & clear cache"), ("online", "Back online")]
 BACKUP_STEPS = [("backup", "Take the backup"), ("verify", "Check the backup files")]
+DRIVE_STEP = ("drive", "Upload to Google Drive")
 MIGRATE = ("migrate", "Migrate", ("migrate",), 300)
 CACHE = ("cache", "Clear cache", ("clear-cache",), 20)
 WEBCACHE = ("webcache", "Clear website cache", ("clear-website-cache",), 20)
@@ -493,10 +494,25 @@ def run_backup(job):
 			if not os.path.isfile(path) or (fn.endswith(".gz") and subprocess.run(["gzip", "-t", path], capture_output=True).returncode != 0):
 				raise RuntimeError(f"Backup file {fn} is missing or damaged.")
 		log(state, "✓ Backup files checked — " + ", ".join(outputs.values()))
+		links = {}
+		if state.get("to_drive"):
+			set_step(state, "drive")
+			from adisitecare import drive
+
+			kinds = [k for k in ("db", "public", "private", "config") if outputs.get(k)]
+			for i, kind in enumerate(kinds):
+				share = bool(state.get("share")) and kind != "config"  # site config holds the DB password + encryption key
+				state.update(stage=f"Uploading {outputs[kind]} to Google Drive", progress=60 + int(35 * i / len(kinds)))
+				log(state, f"\n$ upload → Google Drive: {outputs[kind]}")
+				links[kind] = drive.upload(os.path.join(backups_dir(), outputs[kind]), share)
+				log(state, f"✓ On Google Drive{' — shared: anyone with the link' if share else ' — private'}: {links[kind]['link']}")
+			if state.get("share") and outputs.get("config"):
+				log(state, "🔒 The site config stays private on Drive — it contains the database password and encryption key.")
+			state["drive_links"] = links
 		finish_steps(state, True)
 		state.update(outputs=outputs, status="Success", stage="Backup complete", progress=100, finished=str(now_datetime()))
 		write_state(state)
-		save_record(state, {"db_file": outputs.get("db"), "public_file": outputs.get("public"), "private_file": outputs.get("private"), "config_file": outputs.get("config")})
+		save_record(state, {"drive_links": json.dumps(links) if links else None, "db_file": outputs.get("db"), "public_file": outputs.get("public"), "private_file": outputs.get("private"), "config_file": outputs.get("config")})
 	except Exception as e:
 		finish_steps(state, False)
 		state.update(status="Failed", stage="Backup failed", error=str(e), finished=str(now_datetime()))

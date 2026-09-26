@@ -36,6 +36,11 @@ a site back to an earlier backup on the same server.
 - Runs in the background with a live terminal, progress bar and step checklist
 - Every backup file is checked after it's written; byte-exact downloads (database, files, site config)
 - All backups on the server listed with size, download and **Restore** buttons
+- **Also upload to Google Drive** — when the [Cloud Backup](https://github.com/sanjay-kumar001/cloud_backup) app is
+  installed and connected to Google Drive, backups can go straight to your Drive folder and be **shared as
+  "anyone with the link"** — paste that link into *Restore → Google Drive link* on another server. The site config
+  (database password, encryption key) is always uploaded **private**. adiSiteCare never stores Google credentials;
+  it uses Cloud Backup's connection
 
 ### ♻️ Restore
 - **Upload** a backup (large files are uploaded in resumable pieces), **pick one already on the server**, or

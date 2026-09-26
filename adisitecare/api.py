@@ -89,6 +89,7 @@ def _health():
 		"supervisor": bool(shutil.which("supervisorctl")),
 		"bench_start": bool(_honcho_pid()),
 		"staging_banner": _banner_on(),
+		"drive": _drive_status(),
 		"os_user": _os_user(),
 	}
 
@@ -118,7 +119,7 @@ def overview() -> dict:
 		s = g["stamp"]
 		g["when"] = f"{s[6:8]}-{s[4:6]}-{s[0:4]} {s[9:11]}:{s[11:13]}"
 	total, used, free = shutil.disk_usage(get_bench_path())
-	jobs = frappe.get_all("SiteCare Job", fields=["name", "job_type", "action", "status", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
+	jobs = frappe.get_all("SiteCare Job", fields=["name", "job_type", "action", "status", "drive_links", "stage", "progress", "with_files", "requested_by", "creation", "finished_on",
 		"db_file", "public_file", "private_file", "error", "status_token", "restore_db", "restore_public", "restore_private", "started_on"], order_by="creation desc", limit=15)
 	for j in jobs:
 		j["by"] = frappe.utils.get_fullname(j.requested_by) if j.requested_by else ""
@@ -143,9 +144,10 @@ def job_status(job: str) -> dict:
 	if state:
 		return state
 	d = frappe.db.get_value("SiteCare Job", job, ["name", "job_type", "status", "stage", "progress", "error", "log",
-		"db_file", "public_file", "private_file", "config_file"], as_dict=True) or {}
+		"db_file", "public_file", "private_file", "config_file", "drive_links"], as_dict=True) or {}
 	return {"job": d.get("name"), "type": d.get("job_type"), "status": d.get("status"), "stage": d.get("stage"), "progress": d.get("progress"),
-		"error": d.get("error"), "log": d.get("log"), "outputs": {k: d.get(k + "_file") for k in ("db", "public", "private", "config")}} if d else {}
+		"error": d.get("error"), "log": d.get("log"), "outputs": {k: d.get(k + "_file") for k in ("db", "public", "private", "config")},
+		"drive_links": frappe.parse_json(d.get("drive_links")) if d.get("drive_links") else None} if d else {}
 
 
 @frappe.whitelist(methods=["GET"])
@@ -187,15 +189,22 @@ def download_url(name):
 
 
 @frappe.whitelist(methods=["POST"])
-def start_backup(with_files: int | str = 0) -> dict:
+def start_backup(with_files: int | str = 0, to_drive: int | str = 0, share: int | str = 1) -> dict:
 	_require()
 	if _busy_job():
 		frappe.throw(_("Another backup or restore is already running — wait for it to finish."))
 	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Backup", "status": "Queued", "stage": "Queued",
 		"with_files": cint(with_files), "requested_by": frappe.session.user, "started_on": now_datetime()})
 	doc.insert(ignore_permissions=True)
-	runner.new_state(doc.name, "Backup", with_files=cint(with_files), user=frappe.session.user,
-		title=_("Backup with files") if cint(with_files) else _("Database backup"), steps=runner.make_steps(runner.BACKUP_STEPS))
+	if cint(to_drive):
+		from adisitecare import drive
+
+		st = drive.status()
+		if not st.get("ready"):
+			frappe.throw(st.get("reason") or _("Google Drive (Cloud Backup) isn't connected."))
+	runner.new_state(doc.name, "Backup", with_files=cint(with_files), user=frappe.session.user, to_drive=cint(to_drive), share=cint(share),
+		title=(_("Backup with files") if cint(with_files) else _("Database backup")) + (" → Google Drive" if cint(to_drive) else ""),
+		steps=runner.make_steps(runner.BACKUP_STEPS + ([runner.DRIVE_STEP] if cint(to_drive) else [])))
 	frappe.db.commit()
 	frappe.enqueue("adisitecare.runner.run_backup", queue="long", timeout=4 * 3600, job=doc.name, enqueue_after_commit=True)
 	return {"job": doc.name}
@@ -445,6 +454,15 @@ def _os_user():
 		return getpass.getuser()
 	except Exception:
 		return ""
+
+
+def _drive_status():
+	try:
+		from adisitecare import drive
+
+		return drive.status()
+	except Exception:
+		return {"installed": False, "ready": False}
 
 
 def _banner_on():

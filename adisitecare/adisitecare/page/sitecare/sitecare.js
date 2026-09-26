@@ -44,7 +44,7 @@ class adiSiteCarePage {
 		this.page = page;
 		this.$root = $(`<div class="ae"></div>`).appendTo(page.main);
 		this.tab = "backup";
-		this.opt = { withFiles: 0, source: "upload" };
+		this.opt = { withFiles: 0, source: "upload", toDrive: 0, share: 1 };
 		this.page.set_secondary_action(__("Refresh"), () => this.load(), "refresh");
 		this.injectStyle();
 		this.load();
@@ -145,7 +145,8 @@ class adiSiteCarePage {
 					${tile(0, "db", __("Database only"), __("Fast · all data, no attachments"))}
 					${tile(1, "files", __("Database + files"), __("--with-files · public & private attachments"))}
 				</div>
-				<div class="ae-actions"><button class="btn btn-primary ae-btn bk-go" ${d.busy ? "disabled" : ""}>${ic(this.opt.withFiles ? "files" : "db", 15)} ${this.opt.withFiles ? __("Back up database + files") : __("Back up database")}</button>
+				${this.driveOptionHtml()}
+				<div class="ae-actions"><button class="btn btn-primary ae-btn bk-go" ${d.busy ? "disabled" : ""}>${ic(this.opt.withFiles ? "files" : "db", 15)} ${this.opt.withFiles ? __("Back up database + files") : __("Back up database")}${this.opt.toDrive && (d.health.drive || {}).ready ? " → Google Drive" : ""}</button>
 					<code class="ae-muted" style="margin:0">bench --site ${esc(d.site)} backup${this.opt.withFiles ? " --with-files" : ""}</code>
 					${d.busy ? `<span class="ae-muted">${__("A job is running…")}</span>` : ""}</div>
 			</div>
@@ -163,8 +164,11 @@ class adiSiteCarePage {
 					</div>`).join("")}</div>` : `<div class="ae-empty">${ic("db", 28)}<div>${__("No backups yet — create one above.")}</div></div>`}
 			</div>`);
 		body.find("input[name=bk]").on("change", (e) => { this.opt.withFiles = +e.target.value; this.render(); });
+		body.find(".bk-drive").on("change", (e) => { this.opt.toDrive = e.target.checked ? 1 : 0; this.render(); });
+		body.find(".bk-share").on("change", (e) => { this.opt.share = e.target.checked ? 1 : 0; });
 		body.find(".bk-go").on("click", async () => {
-			const r = await frappe.call({ method: API + "start_backup", args: { with_files: this.opt.withFiles }, freeze: true });
+			const toDrive = this.opt.toDrive && (d.health.drive || {}).ready ? 1 : 0;
+			const r = await frappe.call({ method: API + "start_backup", args: { with_files: this.opt.withFiles, to_drive: toDrive, share: this.opt.share }, freeze: true });
 			frappe.show_alert({ message: __("Backup started"), indicator: "blue" });
 			this.watch(r.message.job);
 			this.load();
@@ -175,6 +179,32 @@ class adiSiteCarePage {
 			this.tab = "restore";
 			this.render();
 		});
+	}
+
+	driveOptionHtml() {
+		const dr = (this.data.health || {}).drive || {};
+		if (!dr.installed) return "";
+		if (!dr.ready) return `<div class="ae-note warn" style="margin-top:12px">${ic("drive", 15)}<span>${__("Google Drive upload is available with Cloud Backup —")} ${esc(dr.reason || "")}
+			<a href="/app/cloud-backup-provider">${__("Open Cloud Backup providers")}</a></span></div>`;
+		return `<div class="ae-drive-opt">
+			<label class="ae-check" style="margin:0"><input type="checkbox" class="bk-drive" ${this.opt.toDrive ? "checked" : ""}>
+				<span><b>${ic("drive", 14)} ${__("Also upload to Google Drive")}</b><small>${__("Through Cloud Backup")}${dr.folder ? ` · ${__("folder")} <code>${esc(dr.folder)}</code>` : ""}</small></span></label>
+			${this.opt.toDrive ? `<label class="ae-check tight" style="margin-left:26px"><input type="checkbox" class="bk-share" ${this.opt.share ? "checked" : ""}>
+				<span><b>${__("Share as \"Anyone with the link\"")}</b><small>${__("To restore on another server with Restore → Google Drive link. Anyone who has a link can download that data — share links carefully.")}
+				${__("The site config (database password, encryption key) always stays private.")}</small></span></label>` : ""}
+		</div>`;
+	}
+
+	driveLinksHtml(links) {
+		if (!links) return "";
+		const L = { db: __("Database"), public: __("Public files"), private: __("Private files"), config: __("Site config") };
+		const rows = ["db", "public", "private", "config"].filter((k) => links[k]).map((k) => `<div class="ae-drive-row">
+			<span class="ae-drive-k">${ic(k === "db" ? "db" : k === "config" ? "server" : "files", 13)} ${L[k]}</span>
+			<a href="${esc(links[k].link)}" target="_blank" rel="noopener" class="ae-drive-link">${esc(links[k].link)}</a>
+			<span class="ae-pill ${links[k].shared ? "ok" : "mute"}">${links[k].shared ? __("Anyone with the link") : __("Private")}</span>
+			<button class="btn btn-default btn-xs ae-copy" data-copy="${esc(links[k].link)}">${ic("copy", 12)} ${__("Copy")}</button></div>`).join("");
+		return `<div class="ae-drive-box"><div class="ae-drive-h">${ic("drive", 15)} <b>${__("On Google Drive")}</b>
+			<small>${links.db && links.db.shared ? __("To restore on another server: Restore → Google Drive link → paste the Database link.") : ""}</small></div>${rows}</div>`;
 	}
 
 	// ============================================================ restore tab
@@ -626,10 +656,12 @@ class adiSiteCarePage {
 					${this.howHtml(j)}
 					${j.error ? `<small class="t-bad">${esc(j.error.slice(0, 140))}</small>` : ""}
 				</div>
+				${(() => { const dl2 = j.drive_links ? frappe.parse_json(j.drive_links) : null; return dl2 && dl2.db ? `<button class="btn btn-default btn-xs ae-copy" data-copy="${esc(dl2.db.link)}" title="${__("Copy the Google Drive link of the database")}">${ic("drive", 13)} ${__("Copy Drive link")}</button>` : ""; })()}
 				${j.db_file ? `<a class="btn btn-default btn-xs" href="${dl(j.db_file)}">${ic("down", 13)} ${__("Database")}</a>` : ""}
 				<button class="btn btn-default btn-xs hs-log" data-job="${esc(j.name)}" data-token="${esc(j.status === "Queued" || j.status === "Running" ? j.status_token || "" : "")}">${j.status === "Queued" || j.status === "Running" ? __("Show progress") : __("View log")}</button>
 			</div>`).join("")}</div>` : `<div class="ae-empty">${ic("history", 28)}<div>${__("Nothing yet.")}</div></div>`}
 		</div>`);
+		body.find(".ae-copy").on("click", (e) => frappe.utils.copy_to_clipboard($(e.currentTarget).data("copy")));
 		body.find(".hs-log").on("click", (e) => {
 			const $b = $(e.currentTarget);
 			this.watch($b.data("job"), $b.data("token") || undefined);
@@ -705,6 +737,7 @@ class adiSiteCarePage {
 					${this.data && !(this.data.health.restart_available || this.data.health.supervisor || this.data.health.bench_start) ? `<small class="ae-muted" style="margin:0">${this.restartHint()}</small>` : ""}
 				</div>`}` : ""}
 			${links ? `<div class="ae-links">${links}</div>` : ""}
+			${st.type === "Backup" && st.status === "Success" ? this.driveLinksHtml(st.drive_links) : ""}
 			<div class="ae-job-grid ${steps.length ? "" : "nosteps"}">
 				${steps.length ? `<div class="ae-steps">${steps.map((s) => `<div class="ae-step ${s.status}">
 					<span class="ae-step-dot">${stepIc[s.status] || ""}</span>
@@ -720,6 +753,7 @@ class adiSiteCarePage {
 		const t = $p.find(".ae-term-body")[0];
 		if (t) t.scrollTop = keepScroll ? prevScroll : t.scrollHeight;
 		$p.find(".ae-term-copy").on("click", () => frappe.utils.copy_to_clipboard(st.log || ""));
+		$p.find(".ae-copy").on("click", (e) => frappe.utils.copy_to_clipboard($(e.currentTarget).data("copy")));
 		$p.find(".ae-close").on("click", () => { this.lastState = null; $p.empty(); });
 		$p.find(".ae-after").on("click", (e) => {
 			const action = $(e.currentTarget).data("action");
@@ -872,6 +906,12 @@ class adiSiteCarePage {
 .ae-term-body .c-ok{color:#8fe07a}.ae-term-body .c-bad{color:#f87171}.ae-term-body .c-warn{color:#fbbf24}.ae-term-body .c-info{color:#67e8f9}.ae-term-body .c-file{color:#b8e0a0}
 .ae-cursor{display:inline-block;width:8px;height:15px;background:#8fe07a;box-shadow:0 0 8px #8fe07a;vertical-align:-3px;animation:ae-blink 1s steps(1) infinite}
 @keyframes ae-blink{50%{opacity:0}}
+.ae-drive-opt{margin-top:14px;padding:12px 14px;border:1px dashed var(--border-color);border-radius:12px}
+.ae-drive-box{border:1px solid rgba(77,100,67,.3);background:rgba(77,100,67,.05);border-radius:12px;padding:10px 14px;display:flex;flex-direction:column;gap:6px}
+.ae-drive-h{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:var(--ae-accent)}.ae-drive-h small{color:var(--text-muted)}
+.ae-drive-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px}
+.ae-drive-k{min-width:110px;display:inline-flex;gap:6px;align-items:center;font-weight:600}
+.ae-drive-link{flex:1;min-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .ae .btn-primary{background:linear-gradient(135deg,#112921,#4D6443);border:none;color:#fff;box-shadow:0 6px 16px -6px rgba(77,100,67,.8)}.ae .btn-primary:hover,.ae .btn-primary:focus{background:linear-gradient(135deg,#1a3a2d,#5f7a52);box-shadow:0 8px 20px -6px rgba(95,140,80,.9)}
 .ae-sec-n{background:linear-gradient(135deg,#112921,#4D6443)!important;box-shadow:0 4px 10px -3px rgba(77,100,67,.7)}
 .ae-status{display:flex;align-items:center;gap:12px;padding:12px 16px;border-radius:14px;font-size:13px}
