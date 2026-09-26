@@ -10,6 +10,7 @@ readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
+    "gdown>=5.1.0",  # restore from a Google Drive link
 ]
 
 [build-system]

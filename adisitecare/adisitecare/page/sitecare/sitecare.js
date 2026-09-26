@@ -34,6 +34,8 @@ const P = {
 	copy: "M9 9h11v11H9zM5 15H4V4h11v1",
 	migrate: "M4 7h11l-3-3m3 3-3 3M20 17H9l3 3m-3-3 3-3",
 	broom: "M19 5 9 15m-3 0 3 3-4 2-2-2 2-4zM14 4l6 6",
+	drive: "M8 3h8l6 10-4 7H6l-4-7zM8 3l6 10M16 3l-6 10M2 13h20",
+	link: "M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1",
 };
 const ic = (n, size = 16, extra = "") => `<svg class="ae-ic ${extra}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${P[n]}"/></svg>`;
 
@@ -181,7 +183,10 @@ class adiSiteCarePage {
 		const LABEL = { db: __("Database backup"), public: __("Public files"), private: __("Private files"), config: __("Site config") };
 		const ACCEPT = { db: ".gz,.sql", public: ".tar,.tgz", private: ".tar,.tgz", config: ".json" };
 		const HINT = { db: ".sql.gz / .sql", public: ".tar / .tgz", private: ".tar / .tgz", config: ".json · " + __("optional") };
-		const slot = (kind, req) => src === "upload"
+		const slot = (kind, req) => src === "drive"
+			? `<label class="ae-field"><span>${ic("link", 13)} ${LABEL[kind]}${req ? " *" : ""} <small>${__("Google Drive link")}${req ? "" : " · " + __("optional")}</small></span>
+				<input type="url" class="form-control rs-drive" data-kind="${kind}" placeholder="https://drive.google.com/file/d/…/view?usp=sharing" autocomplete="off"></label>`
+			: src === "upload"
 			? `<label class="ae-drop" data-kind="${kind}"><input type="file" class="rs-file" data-kind="${kind}" accept="${ACCEPT[kind]}">
 				<span class="ae-drop-ic">${ic(kind === "db" ? "db" : kind === "config" ? "server" : "files", 18)}</span>
 				<span class="ae-drop-t"><b>${LABEL[kind]}${req ? " *" : ""}</b><small class="fn">${__("Drop a file or click")} · ${HINT[kind]}</small></span>
@@ -202,8 +207,11 @@ class adiSiteCarePage {
 					<div class="ae-seg">
 						<button data-src="upload" class="${src === "upload" ? "on" : ""}">${ic("up", 14)} ${__("Upload from my computer")}</button>
 						<button data-src="server" class="${src === "server" ? "on" : ""}">${ic("server", 14)} ${__("Backup on this server")}</button>
+						<button data-src="drive" class="${src === "drive" ? "on" : ""}">${ic("drive", 14)} ${__("Google Drive link")}</button>
 					</div>
-					<p class="ae-muted">${src === "upload" ? __("E.g. a backup downloaded from production, restored here on staging. Files are saved into private/backups.") : __("E.g. go back to an earlier state of this same site.")}</p>
+					<p class="ae-muted">${src === "upload" ? __("E.g. a backup downloaded from production, restored here on staging. Files are saved into private/backups.")
+						: src === "drive" ? __("Paste share links — the server downloads them (gdown), restores, and deletes the downloaded copies when the restore is done. Share each file as <b>Anyone with the link</b>.")
+						: __("E.g. go back to an earlier state of this same site.")}</p>
 					<div class="ae-grid2">${slot("db", true)}${slot("config")}</div>
 					<label class="ae-check"><input type="checkbox" class="rs-files" ${hasFiles ? "checked" : ""}><span><b>${__("Also restore files")}</b><small>${__("Public and/or private attachments")}</small></span></label>
 					<div class="ae-grid2 rs-files-box" style="${hasFiles ? "" : "display:none"}">${slot("public")}${slot("private")}</div>
@@ -314,6 +322,21 @@ class adiSiteCarePage {
 			return body.find(`.rs-pick[data-kind=${kind}]`).val() || null;
 		};
 		const site = body.find(".rs-site").val().trim(), pwd = body.find(".rs-pwd").val();
+		const driveOf = (kind) => (body.find(`.rs-drive[data-kind=${kind}]`).val() || "").trim();
+		if (this.opt.source === "drive") {
+			if (!/^https:\/\/(drive|docs)\.google\.com\//.test(driveOf("db"))) return frappe.msgprint(__("Paste the Google Drive link of the database backup (https://drive.google.com/file/d/…/view)."));
+			if (site !== this.data.site) return frappe.msgprint(__("Type the site name exactly: {0}", [this.data.site]));
+			if (!pwd) return frappe.msgprint(__("Enter your login password for this site."));
+			const withFiles = body.find(".rs-files").is(":checked");
+			const args = { drive_db: driveOf("db"), drive_config: driveOf("config") || undefined,
+				drive_public: withFiles ? driveOf("public") || undefined : undefined, drive_private: withFiles ? driveOf("private") || undefined : undefined,
+				confirm_site: site, password: pwd, restart: body.find(".rs-restart").is(":checked") ? 1 : 0, staging: body.find(".rs-staging").is(":checked") ? 1 : 0 };
+			return frappe.confirm(`<div style="line-height:1.6">${__("Download the backup from Google Drive and restore it into {0}?", [`<b>${esc(this.data.site)}</b>`])}<br>
+				<span class="text-muted">${__("The site stays online while it downloads, then goes into maintenance mode. A safety backup is taken first. The downloaded files are deleted from the server when the restore is done.")}</span></div>`, async () => {
+				const r = await frappe.call({ method: API + "start_restore", freeze: true, args });
+				this.watch(r.message.job, r.message.token);
+			});
+		}
 		if (!fileOf("db") && !body.find(".rs-pick[data-kind=db]").val()) return frappe.msgprint(__("Choose the database backup."));
 		if (site !== this.data.site) return frappe.msgprint(__("Type the site name exactly: {0}", [this.data.site]));
 		if (!pwd) return frappe.msgprint(__("Enter your login password for this site."));
@@ -714,8 +737,9 @@ class adiSiteCarePage {
 		for (const line of text.replace(/\r/g, "\n").replace(/\n+$/, "").split("\n")) {
 			const m = line.match(/^(.*?)\s*:\s*\[[=\s]*\]?\s*\d*%?$/);
 			const prev = lines.length && lines[lines.length - 1].match(/^(.*?)\s*:\s*\[/);
-			if (m && prev && prev[1] === m[1]) lines[lines.length - 1] = line;
-			else lines.push(line);
+			const bar = /^\s*\d+%\|/.test(line), prevBar = lines.length && /^\s*\d+%\|/.test(lines[lines.length - 1]);
+			if ((m && prev && prev[1] === m[1]) || (bar && prevBar)) lines[lines.length - 1] = line;
+			else if (line.trim() || !bar) lines.push(line);
 		}
 		return lines.map((line) => {
 			const l = esc(line);

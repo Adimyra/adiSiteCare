@@ -38,7 +38,9 @@ a site back to an earlier backup on the same server.
 - All backups on the server listed with size, download and **Restore** buttons
 
 ### ♻️ Restore
-- **Upload** a backup (large files are uploaded in chunks) or **pick one already on the server**
+- **Upload** a backup (large files are uploaded in resumable pieces), **pick one already on the server**, or
+  **paste a Google Drive link** — the server downloads it with `gdown`, restores it, and deletes the downloaded
+  copy when done (share the file as *Anyone with the link*)
 - Optional public / private files and site config (for the encryption key of another site)
 - Guided, safe order — each step verified before the next:
   1. Check the backup files — gzip integrity, partial backup, Frappe version, SQL validation

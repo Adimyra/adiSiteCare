@@ -91,6 +91,58 @@ def new_state(job, kind, token=None, **extra):
 
 # ---------------------------------------------------------------- steps (the checklist next to the terminal)
 
+DRIVE_ID = re.compile(r"^[-\w]{20,}$")
+KIND_LABEL = {"db": "database backup", "public": "public files", "private": "private files", "config": "site config"}
+
+
+def _sniff_ext(path, kind):
+	"""File type from its first bytes — never trust a name that came from the internet."""
+	with open(path, "rb") as f:
+		head = f.read(512)
+	if head[:2] == b"\x1f\x8b":
+		return ".sql.gz" if kind == "db" else ".tgz" if kind in ("public", "private") else None
+	if kind in ("public", "private"):
+		return ".tar" if head[257:262] == b"ustar" else None
+	if kind == "db":
+		text = head.lstrip()
+		return ".sql" if text.startswith((b"--", b"/*", b"CREATE", b"SET", b"DROP")) else None
+	if kind == "config":
+		return ".json" if head.lstrip().startswith(b"{") else None
+	return None
+
+
+def _drive_download(state, kind, file_id, start, end):
+	"""Download one file from a Google Drive share link into private/backups (a Frappe-style name)."""
+	from adisitecare.api import _upload_name
+
+	if not DRIVE_ID.match(file_id or ""):
+		raise RuntimeError(f"Invalid Google Drive link for the {KIND_LABEL[kind]}.")
+	tmp = os.path.join(backups_dir(), f".drive-{state['job']}-{kind}")
+	shutil.rmtree(tmp, ignore_errors=True)
+	os.makedirs(tmp)
+	try:
+		cmd = [os.path.join(get_bench_path(), "env", "bin", "python"), "-m", "gdown", file_id, "-O", tmp + "/", "--no-cookies"]
+		run(state, cmd, f"Downloading the {KIND_LABEL[kind]} from Google Drive", start, end, expect_seconds=180)
+		got = [f for f in os.listdir(tmp) if not f.startswith(".")]
+		if not got:
+			raise RuntimeError(f"Google Drive sent no file for the {KIND_LABEL[kind]} — is the link shared as \"Anyone with the link\"?")
+		src = os.path.join(tmp, got[0])
+		ext = _sniff_ext(src, kind)
+		if not ext:
+			raise RuntimeError(f"The file from Google Drive ({got[0]}) is not a {KIND_LABEL[kind]}.")
+		name = got[0] if got[0].lower().endswith(ext) else os.path.splitext(got[0])[0] + ext
+		final = _upload_name(name, kind, now_datetime().strftime("%Y%m%d_%H%M%S"))
+		dest = os.path.join(backups_dir(), final)
+		if os.path.exists(dest):
+			base, dot, rest = final.partition(".")
+			dest = os.path.join(backups_dir(), f"{base}-{state['job'].lower()}.{rest}")
+		os.replace(src, dest)
+		log(state, f"✓ Downloaded {got[0]} ({os.path.getsize(dest) / 1048576:.1f} MB) → private/backups/{os.path.basename(dest)}")
+		return dest
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)
+
+
 RESTORE_STEPS = [("check", "Check the backup files"), ("safety", "Safety backup"), ("maintenance", "Maintenance mode on"),
 	("restore", "Restore database & files"), ("migrate", "Migrate & clear cache"), ("online", "Back online")]
 BACKUP_STEPS = [("backup", "Take the backup"), ("verify", "Check the backup files")]
@@ -480,9 +532,27 @@ def run_restore(job):
 	save_record(state, {"started_on": state["started"]})
 	src = state["sources"]
 	staging = state.get("staging")
+	drive = state.get("drive") or {}
+	downloaded = []
 	maintenance_on = restored = False
 	with_files = bool(src.get("public") or src.get("private"))
 	try:
+		# 0. Google Drive: fetch the files first (the site stays online meanwhile)
+		if drive:
+			set_step(state, "download")
+			kinds = [k for k in ("db", "config", "public", "private") if drive.get(k)]
+			for i, kind in enumerate(kinds):
+				path = _drive_download(state, kind, drive[kind], 1 + i * 2, 3 + i * 2)
+				src[kind] = path
+				downloaded.append(path)
+			state["sources"] = src
+			need = sum(os.path.getsize(p) for k, p in src.items() if p and k != "config") * 2 + 200 * 1024 * 1024
+			if shutil.disk_usage(get_bench_path()).free < need:
+				raise RuntimeError("Not enough free disk space for the restore after downloading — free some space and try again.")
+			set_step(state, "download", "done")
+			save_record(state, {"restore_db": os.path.basename(src["db"]), "restore_public": os.path.basename(src.get("public") or "") or None,
+				"restore_private": os.path.basename(src.get("private") or "") or None})
+
 		# 1. pre-flight: the files are there and look right
 		set_step(state, "check")
 		state.update(stage="Checking the backup files", progress=3)
@@ -595,6 +665,16 @@ def run_restore(job):
 		save_record(state, {"backup_taken_on": state.get("backup_taken_on"), "safety_backup": json.dumps(safety), "restore_db": os.path.basename(db),
 			"restore_public": os.path.basename(src.get("public") or "") or None, "restore_private": os.path.basename(src.get("private") or "") or None})
 
+		# downloaded from Google Drive → remove them now that the restore is done
+		for path in downloaded:
+			try:
+				os.remove(path)
+				log(state, f"🗑 Removed the downloaded file {os.path.basename(path)} from the server.")
+			except OSError:
+				pass
+		if downloaded:
+			save_record(state)
+
 		# 8. optional restart — last and detached; skipped (never asks a password) when the server isn't set up for it
 		if state.get("restart"):
 			_do_restart(state)
@@ -613,6 +693,9 @@ def run_restore(job):
 				f"or on the server: bench --site {frappe.local.site} sitecare-restore-db sites/{frappe.local.site}/private/backups/{safety}, "
 				"then migrate and set-maintenance-mode off.")
 		finish_steps(state, False)
+		if downloaded:
+			recovery += (" The files downloaded from Google Drive are kept in private/backups so you can retry with"
+				" 'Backup on this server' (Frappe removes them after about a day).")
 		state.update(status="Failed", stage="Restore failed", error=f"{e} {recovery}".strip(), finished=str(now_datetime()))
 		log(state, f"✗ {state['error']}")
 		write_state(state)

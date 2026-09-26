@@ -288,6 +288,17 @@ def upload_chunk(upload_id: str, kind: str, filename: str, offset: int | str, si
 	return {"ref": final, "done": True, "received": received, "size": _human(received)}
 
 
+def _drive_id(link, kind):
+	"""File id from a Google Drive share link — only Google Drive links are accepted."""
+	link = (link or "").strip()
+	m = re.match(r"^https://(drive|docs)\.google\.com/", link)
+	fid = re.search(r"/d/([-\w]{20,})", link) or re.search(r"[?&]id=([-\w]{20,})", link)
+	if not m or not fid:
+		label = {"db": _("database backup"), "public": _("public files"), "private": _("private files"), "config": _("site config")}[kind]
+		frappe.throw(_("The {0} link isn't a Google Drive file link (https://drive.google.com/file/d/…/view).").format(label))
+	return fid.group(1)
+
+
 def _resolve(ref, kind):
 	"""A file name in private/backups → absolute path (never outside that folder)."""
 	if not ref:
@@ -304,8 +315,9 @@ def _resolve(ref, kind):
 
 
 @frappe.whitelist(methods=["POST"])
-def start_restore(db: str, confirm_site: str, password: str, public: str | None = None, private: str | None = None,
-		config: str | None = None, restart: int | str = 0, staging: int | str = 0) -> dict:
+def start_restore(confirm_site: str, password: str, db: str | None = None, public: str | None = None, private: str | None = None,
+		config: str | None = None, restart: int | str = 0, staging: int | str = 0, drive_db: str | None = None,
+		drive_public: str | None = None, drive_private: str | None = None, drive_config: str | None = None) -> dict:
 	_require()
 	from frappe.utils.password import check_password
 
@@ -318,9 +330,15 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 	if _busy_job():
 		frappe.throw(_("Another backup or restore is already running — wait for it to finish."))
 
-	sources = {"db": _resolve(db, "db"), "public": _resolve(public, "public"), "private": _resolve(private, "private"),
-		"config": _resolve(config, "config")}
-	if not sources["db"]:
+	drive = {k: _drive_id(v, k) for k, v in (("db", drive_db), ("public", drive_public), ("private", drive_private), ("config", drive_config)) if v}
+	if drive:
+		if "db" not in drive:
+			frappe.throw(_("Paste the Google Drive link of the database backup."))
+		sources = {"db": None, "public": None, "private": None, "config": None}
+	else:
+		sources = {"db": _resolve(db, "db"), "public": _resolve(public, "public"), "private": _resolve(private, "private"),
+			"config": _resolve(config, "config")}
+	if not drive and not sources["db"]:
 		frappe.throw(_("Choose the database backup to restore."))
 	need = sum(os.path.getsize(sources[k]) for k in ("db", "public", "private") if sources[k]) * 3 + 200 * 1024 * 1024
 	free = shutil.disk_usage(get_bench_path()).free
@@ -328,15 +346,16 @@ def start_restore(db: str, confirm_site: str, password: str, public: str | None 
 		frappe.throw(_("Not enough disk space: {0} free, about {1} needed (restore + safety backup). Free some space first.").format(_human(free), _human(need)))
 
 	doc = frappe.get_doc({"doctype": "SiteCare Job", "job_type": "Restore", "status": "Queued", "stage": "Queued",
-		"with_files": 1 if (sources["public"] or sources["private"]) else 0, "restart_after": cint(restart),
+		"with_files": 1 if (sources["public"] or sources["private"] or drive.get("public") or drive.get("private")) else 0, "restart_after": cint(restart),
 		"requested_by": frappe.session.user, "started_on": now_datetime(), "status_token": frappe.generate_hash(length=32),
-		"restore_db": os.path.basename(sources["db"]), "restore_public": os.path.basename(sources["public"] or "") or None,
+		"restore_db": os.path.basename(sources["db"]) if sources["db"] else _("(Google Drive link)"), "restore_public": os.path.basename(sources["public"] or "") or None,
 		"restore_private": os.path.basename(sources["private"] or "") or None})
 	doc.insert(ignore_permissions=True)
 	runner.cleanup_status_files()
-	steps = runner.RESTORE_STEPS + ([("restart", "Restart bench")] if cint(restart) else [])
+	steps = ([("download", "Download from Google Drive")] if drive else []) + runner.RESTORE_STEPS + ([("restart", "Restart bench")] if cint(restart) else [])
 	runner.new_state(doc.name, "Restore", token=doc.status_token, sources=sources, restart=cint(restart), staging=cint(staging), created=str(doc.creation),
-		user=frappe.session.user, with_files=doc.with_files, title=_("Restore {0}").format(os.path.basename(sources["db"])),
+		user=frappe.session.user, with_files=doc.with_files, drive=drive,
+		title=_("Restore {0}").format(os.path.basename(sources["db"]) if sources["db"] else _("from Google Drive")),
 		steps=runner.make_steps(steps))
 	frappe.db.commit()
 	frappe.enqueue("adisitecare.runner.run_restore", queue="long", timeout=6 * 3600, job=doc.name, enqueue_after_commit=True)
